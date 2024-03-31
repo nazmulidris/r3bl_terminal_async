@@ -103,14 +103,14 @@ This is the main entry point for this library.
 - When done, call [`Readline::flush()`] to ensure that all lines written to
   the `SharedWriter` are output.
 
-## [`ProgressBarAsync::try_new_and_start()`]
+## [`Spinner::try_new_and_start()`]
 
 This displays an indeterminate progress bar while waiting for a long-running task to
 complete. The intention with displaying this progress bar is to give the user an
-indication that the program is still running and hasn't hung. However, if other tasks
-concurrently write to `stdout` then the progress bar output will be clobbered and it
-won't look very nice. Currently displaying the progress bar does not stall the output
-from tasks who are using the same [`SharedWriter`].
+indication that the program is still running and hasn't hung. When other tasks produce
+output concurrently, this progress bar will not be clobbered. It suspends the output
+from all the [`SharedWriter`] instances that are associated with one [`Readline`]
+instance. The `spinner.rs` example shows this.
 
 ## [`tracing_setup::init()`]
 

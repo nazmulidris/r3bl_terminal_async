@@ -20,8 +20,11 @@ refactor this crate:
   ✔ reorganize into public api and internal impl of crate @done(24-03-31 11:20)
   ✔ rename repo and cargo.toml @done(24-03-31 11:20)
   ✔ update `README.md` and `lib.rs` @done(24-03-31 11:21)
+  ✔ experiment: try and add modal support that stops `SharedWriter` when bar is spinning @done(24-03-31 18:46)
+  ☐ replace the dots w/ spinner that uses a colorwheel and cycles through chars: braille, blocks (of varying opacity)
   ☐ add `is_tty` support to `ProgressBarAsync`
-  ☐ experiment: try and add modal support that stops `SharedWriter` when bar is spinning
-  ☐ add tests: unit tests and bats tests
+  ☐ add examples: terminal_async
   ☐ add examples: visit files and folders breadth first or depth first (use memory arena, and IR-free visitor / streamed versions)
+  ☐ add tests: unit tests (record video)
+  ☐ add tests: and bats tests (record video)
   ☐ move repo into `r3bl-open-core`

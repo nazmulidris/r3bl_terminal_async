@@ -33,18 +33,25 @@ use crate::{History, ReadlineError, ReadlineEvent};
 
 #[derive(Default)]
 pub struct LineState {
-    // Unicode Line
+    /// Unicode line.
     line: String,
-    // Index of grapheme in line
+
+    /// Index of grapheme in line.
     line_cursor_grapheme: usize,
-    // Column of grapheme in line
+
+    /// Column of grapheme in line.
     current_column: u16,
 
-    cluster_buffer: String, // buffer for holding partial grapheme clusters as they come in
+    /// buffer for holding partial grapheme clusters as they come in
+    cluster_buffer: String,
 
     prompt: String,
-    pub should_print_line_on_enter: bool, // After pressing enter, should we print the line just submitted?
-    pub should_print_line_on_control_c: bool, // After pressing control_c should we print the line just cancelled?
+
+    /// After pressing enter, should we print the line just submitted?
+    pub should_print_line_on_enter: bool,
+
+    /// After pressing control_c should we print the line just cancelled?
+    pub should_print_line_on_control_c: bool,
 
     last_line_length: usize,
     last_line_completed: bool,
@@ -68,10 +75,13 @@ impl LineState {
             ..Default::default()
         }
     }
+
+    /// Gets the number of lines wrapped
     fn line_height(&self, pos: u16) -> u16 {
-        pos / self.term_size.0 // Gets the number of lines wrapped
+        pos / self.term_size.0
     }
-    /// Move from a position on the line to the start
+
+    /// Move from a position on the line to the start.
     fn move_to_beginning(&self, term: &mut impl Write, from: u16) -> io::Result<()> {
         let move_up = self.line_height(from.saturating_sub(1));
         term.queue(cursor::MoveToColumn(0))?;
@@ -80,7 +90,8 @@ impl LineState {
         }
         Ok(())
     }
-    /// Move from the start of the line to some position
+
+    /// Move from the start of the line to some position.
     fn move_from_beginning(&self, term: &mut impl Write, to: u16) -> io::Result<()> {
         let line_height = self.line_height(to.saturating_sub(1));
         let line_remaining_len = to % self.term_size.0; // Get the remaining length
@@ -91,7 +102,8 @@ impl LineState {
 
         Ok(())
     }
-    /// Move cursor by one unicode grapheme either left (negative) or right (positive)
+
+    /// Move cursor by one unicode grapheme either left (negative) or right (positive).
     fn move_cursor(&mut self, change: isize) -> io::Result<()> {
         if change > 0 {
             let count = self.line.graphemes(true).count();
@@ -108,12 +120,14 @@ impl LineState {
 
         Ok(())
     }
+
     fn current_grapheme(&self) -> Option<(usize, &str)> {
         self.line
             .grapheme_indices(true)
             .take(self.line_cursor_grapheme)
             .last()
     }
+
     fn next_grapheme(&self) -> Option<(usize, &str)> {
         let total = self.line.grapheme_indices(true).count();
         if self.line_cursor_grapheme == total {
@@ -124,19 +138,23 @@ impl LineState {
             .take(self.line_cursor_grapheme + 1)
             .last()
     }
+
     fn reset_cursor(&self, term: &mut impl Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)
     }
+
     fn set_cursor(&self, term: &mut impl Write) -> io::Result<()> {
         self.move_from_beginning(term, self.current_column)
     }
-    /// Clear current line
+
+    /// Clear current line.
     pub fn clear(&self, term: &mut impl Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)?;
         term.queue(Clear(FromCursorDown))?;
         Ok(())
     }
-    /// Render line
+
+    /// Render line.
     pub fn render(&self, term: &mut impl Write) -> io::Result<()> {
         write!(term, "{}{}", self.prompt, self.line)?;
         let line_len = self.prompt.len() + UnicodeWidthStr::width(&self.line[..]);
@@ -144,12 +162,14 @@ impl LineState {
         self.move_from_beginning(term, self.current_column)?;
         Ok(())
     }
-    /// Clear line and render
+
+    /// Clear line and render.
     pub fn clear_and_render(&self, term: &mut impl Write) -> io::Result<()> {
         self.clear(term)?;
         self.render(term)?;
         Ok(())
     }
+
     pub fn print_data(&mut self, data: &[u8], term: &mut impl Write) -> Result<(), ReadlineError> {
         self.clear(term)?;
 
@@ -187,10 +207,12 @@ impl LineState {
         self.render(term)?;
         Ok(())
     }
+
     pub fn print(&mut self, string: &str, term: &mut impl Write) -> Result<(), ReadlineError> {
         self.print_data(string.as_bytes(), term)?;
         Ok(())
     }
+
     pub fn update_prompt(
         &mut self,
         prompt: &str,
@@ -205,6 +227,7 @@ impl LineState {
         term.flush()?;
         Ok(())
     }
+
     pub fn handle_event(
         &mut self,
         event: Event,

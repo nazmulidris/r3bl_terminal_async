@@ -15,14 +15,14 @@
  *   limitations under the License.
  */
 
+use crate::Text;
+use futures_util::{pin_mut, ready, AsyncWrite, FutureExt};
 use std::{
     io::{self},
     ops::DerefMut,
     pin::Pin,
     task::{Context, Poll},
 };
-
-use futures_util::{pin_mut, ready, AsyncWrite, FutureExt};
 use thingbuf::mpsc::{errors::TrySendError, Sender};
 
 // 01: add tests
@@ -40,15 +40,15 @@ use thingbuf::mpsc::{errors::TrySendError, Sender};
 #[pin_project::pin_project]
 pub struct SharedWriter {
     #[pin]
-    pub(crate) buffer: Vec<u8>,
-    pub(crate) sender: Sender<Vec<u8>>,
+    pub(crate) buffer: Text,
+    pub(crate) line_sender: Sender<Text>,
 }
 
 impl Clone for SharedWriter {
     fn clone(&self) -> Self {
         Self {
             buffer: Vec::new(),
-            sender: self.sender.clone(),
+            line_sender: self.line_sender.clone(),
         }
     }
 }
@@ -62,7 +62,7 @@ impl AsyncWrite for SharedWriter {
         let mut this = self.project();
         this.buffer.extend_from_slice(buf);
         if this.buffer.ends_with(b"\n") {
-            let fut = this.sender.send_ref();
+            let fut = this.line_sender.send_ref();
             pin_mut!(fut);
             let mut send_buf = ready!(fut.poll_unpin(cx)).map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "thingbuf receiver has closed")
@@ -75,9 +75,10 @@ impl AsyncWrite for SharedWriter {
             Poll::Ready(Ok(buf.len()))
         }
     }
+
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut this = self.project();
-        let fut = this.sender.send_ref();
+        let fut = this.line_sender.send_ref();
         pin_mut!(fut);
         let mut send_buf = ready!(fut.poll_unpin(cx))
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "thingbuf receiver has closed"))?;
@@ -86,6 +87,7 @@ impl AsyncWrite for SharedWriter {
         this.buffer.clear();
         Poll::Ready(Ok(()))
     }
+
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
@@ -95,7 +97,7 @@ impl io::Write for SharedWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buffer.extend_from_slice(buf);
         if self.buffer.ends_with(b"\n") {
-            match self.sender.try_send_ref() {
+            match self.line_sender.try_send_ref() {
                 Ok(mut send_buf) => {
                     std::mem::swap(send_buf.deref_mut(), &mut self.buffer);
                     self.buffer.clear();
@@ -111,6 +113,7 @@ impl io::Write for SharedWriter {
         }
         Ok(buf.len())
     }
+
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }

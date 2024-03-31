@@ -78,6 +78,19 @@ impl TerminalAsync {
     /// Simply flush the buffer. If there's a newline in the buffer, it will be printed.
     /// Otherwise it won't.
     pub async fn flush(&mut self) {
-        let _ = self.readline.lock().await.flush();
+        let _ = self.readline.lock().await.flush().await;
+    }
+
+    pub async fn suspend(&mut self) {
+        let mut readline = self.readline.lock().await;
+        readline.suspend().await;
+    }
+
+    pub async fn resume(&mut self) {
+        let this = self.clone();
+        this.readline.lock().await.resume().await;
+
+        let mut this = self.clone();
+        this.flush().await;
     }
 }

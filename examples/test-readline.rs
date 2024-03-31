@@ -22,19 +22,19 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut rl, mut stdout) = Readline::new("prompt> ".into())?;
+    let (mut readline, mut stdout) = Readline::new("prompt> ".into())?;
 
-    rl.should_print_line_on(false, false);
+    readline.should_print_line_on(false, false);
 
     loop {
         tokio::select! {
             _ = sleep(Duration::from_secs(1)) => {
                 writeln!(stdout, "Message received!")?;
             }
-            cmd = rl.readline() => match cmd {
+            cmd = readline.readline() => match cmd {
                 Ok(ReadlineEvent::Line(line)) => {
                     writeln!(stdout, "You entered: {line:?}")?;
-                    rl.add_history_entry(line.clone());
+                    readline.add_history_entry(line.clone());
                     if line == "quit" {
                         break;
                     }
@@ -54,6 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    rl.flush()?;
+
+    readline.flush().await?;
+
     Ok(())
 }
