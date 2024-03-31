@@ -15,15 +15,15 @@
  *   limitations under the License.
  */
 
+use crate::TerminalAsync;
 use crossterm::{cursor::*, style::*, terminal::*, *};
 use miette::miette;
+use std::io::Write;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::AbortHandle, time::interval};
 
-use crate::TerminalAsync;
-
 // 01: This needs a TerminalAsync instance to work. So this is not the main entry point for the crate.
-pub struct ProgressBarAsync {
+pub struct Spinner {
     pub tick_delay: Duration,
     pub message: String,
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
@@ -34,24 +34,36 @@ pub struct ProgressBarAsync {
 // 01: needs tests
 // 01: check isTTY and disable progress bar if not
 
-impl ProgressBarAsync {
-    pub async fn finish_with_message(&mut self, message: &str) {
-        // If task is running, abort it. And print "\n".
-        if let Some(abort_handle) = self.abort_handle.lock().await.take() {
-            let mut stdout = self.terminal_async.clone_stdout();
-            abort_handle.abort();
-            let _ = execute!(
-                stdout,
-                MoveUp(1),
-                MoveToColumn(0),
-                Clear(ClearType::CurrentLine),
-                Print(format!("{}\n", message)),
-            );
-            self.terminal_async.flush().await;
-        }
+impl Spinner {
+    pub async fn start(
+        message: String,
+        tick_delay: Duration,
+        terminal_async: TerminalAsync,
+    ) -> miette::Result<Spinner> {
+        let mut bar = Spinner {
+            message,
+            tick_delay,
+            terminal_async,
+            abort_handle: Arc::new(Mutex::new(None)),
+        };
+
+        // Start task and get the abort_handle.
+        let abort_handle = bar.try_start_task().await?;
+
+        // Save the abort_handle.
+        *bar.abort_handle.lock().await = Some(abort_handle);
+
+        // Suspend terminal_async output while spinner is running.
+        bar.terminal_async.suspend().await;
+
+        Ok(bar)
     }
 
-    pub async fn try_start_task(&mut self) -> miette::Result<AbortHandle> {
+    fn get_stdout(&self) -> impl std::io::Write {
+        std::io::stderr()
+    }
+
+    async fn try_start_task(&mut self) -> miette::Result<AbortHandle> {
         if self.abort_handle.lock().await.is_some() {
             return Err(miette!("Task is already running"));
         }
@@ -59,8 +71,7 @@ impl ProgressBarAsync {
         let message = self.message.clone();
         let tick_delay = self.tick_delay;
         let abort_handle = self.abort_handle.clone();
-        let mut stdout = self.terminal_async.clone_stdout();
-        let mut terminal_async = self.terminal_async.clone();
+        let mut stdout = self.get_stdout();
 
         let join_handle = tokio::spawn(async move {
             let mut interval = interval(tick_delay);
@@ -78,46 +89,42 @@ impl ProgressBarAsync {
 
                 let output = format!("{}{}", message_clone, ".".repeat(count));
 
-                // At least one tick has happened. So, move the cursor up and clear the line.
-                if count > 0 {
-                    let _ = execute!(
-                        stdout,
-                        MoveUp(1),
-                        MoveToColumn(0),
-                        Clear(ClearType::CurrentLine),
-                    );
-                }
-                count += 1;
-
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = execute!(stdout, MoveToColumn(0), Print(format!("{}\n", output)),);
+                let _ = execute!(
+                    stdout,
+                    MoveToColumn(0),
+                    Print(format!("{}\n", output)),
+                    MoveUp(1),
+                );
+                let _ = stdout.flush();
 
-                terminal_async.flush().await;
+                count += 1;
             }
         });
 
         Ok(join_handle.abort_handle())
     }
 
-    pub async fn try_new_and_start(
-        message: String,
-        tick_delay: Duration,
-        terminal_async: TerminalAsync,
-    ) -> miette::Result<ProgressBarAsync> {
-        let mut bar = ProgressBarAsync {
-            message,
-            tick_delay,
-            terminal_async,
-            abort_handle: Arc::new(Mutex::new(None)),
-        };
+    pub async fn stop(&mut self, message: &str) {
+        // If task is running, abort it. And print "\n".
+        if let Some(abort_handle) = self.abort_handle.lock().await.take() {
+            // Abort the task.
+            abort_handle.abort();
 
-        // Start task and get the abort_handle.
-        let abort_handle = bar.try_start_task().await?;
+            // Print the final message.
+            let mut stdout = self.get_stdout();
+            let _ = execute!(
+                stdout,
+                MoveUp(1),
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine),
+                Print(format!("{}\n", message)),
+            );
+            let _ = stdout.flush();
 
-        // Save the abort_handle.
-        *bar.abort_handle.lock().await = Some(abort_handle);
-
-        Ok(bar)
+            // Resume terminal_async output.
+            self.terminal_async.resume().await;
+        }
     }
 }

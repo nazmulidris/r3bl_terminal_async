@@ -15,11 +15,11 @@
  *   limitations under the License.
  */
 
-pub mod progress_bar;
+pub mod spinner;
 
 pub mod terminal_async;
 pub mod tracing_setup;
 
-pub use progress_bar::*;
+pub use spinner::*;
 pub use terminal_async::*;
 pub use tracing_setup::*;

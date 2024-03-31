@@ -103,7 +103,7 @@ This is the main entry point for this library.
 - When done, call [`Readline::flush()`] to ensure that all lines written to
   the `SharedWriter` are output.
 
-## [`ProgressBarAsync::try_new_and_start()`]
+## [`Spinner::try_new_and_start()`]
 
 This displays an indeterminate progress bar while waiting for a long-running task to
 complete. The intention with displaying this progress bar is to give the user an

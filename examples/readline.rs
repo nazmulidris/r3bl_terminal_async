@@ -159,7 +159,7 @@ async fn main() -> miette::Result<()> {
     }
 
     // Flush all writers to stdout
-    readline.flush().into_diagnostic()?;
+    readline.flush().await.into_diagnostic()?;
 
     Ok(())
 }

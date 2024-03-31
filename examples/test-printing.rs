@@ -20,7 +20,7 @@
 use std::io::Write;
 
 use miette::IntoDiagnostic;
-use r3bl_terminal_async::{Readline, ReadlineEvent};
+use r3bl_terminal_async::{Readline, ReadlineEvent, Text};
 use tracing::info;
 
 mod helpers;
@@ -28,14 +28,14 @@ use helpers::*;
 
 #[derive(Debug)]
 struct BigStruct {
-    bytes: Vec<u8>,
+    bytes: Text,
     name: String,
     number: usize,
 }
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-    let (mut rl, mut stdout) = Readline::new("> ".to_owned()).unwrap();
+    let (mut readline, mut stdout) = Readline::new("> ".to_owned()).unwrap();
 
     let thingy = BigStruct {
         bytes: vec![1; 20],
@@ -46,7 +46,7 @@ async fn main() -> miette::Result<()> {
     tracing_setup::init(stdout.clone())?;
 
     loop {
-        match rl.readline().await {
+        match readline.readline().await {
             Ok(ReadlineEvent::Line(_)) => {
                 writeln!(stdout, "{:?}", thingy).into_diagnostic()?;
                 info!("{:?}", thingy);
@@ -62,7 +62,8 @@ async fn main() -> miette::Result<()> {
             }
         }
     }
-    rl.flush().into_diagnostic()?;
+
+    readline.flush().await.into_diagnostic()?;
 
     Ok(())
 }

@@ -15,10 +15,10 @@
  *   limitations under the License.
  */
 
-use std::collections::VecDeque;
-
+use crate::HISTORY_SIZE_MAX;
 use futures_channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures_util::StreamExt;
+use std::collections::VecDeque;
 
 // 01: add tests
 
@@ -30,12 +30,13 @@ pub struct History {
 
     current_position: Option<usize>,
 }
+
 impl Default for History {
     fn default() -> Self {
         let (sender, receiver) = mpsc::unbounded();
         Self {
             entries: Default::default(),
-            max_size: 1000,
+            max_size: HISTORY_SIZE_MAX,
             sender,
             receiver,
             current_position: Default::default(),
@@ -52,11 +53,13 @@ impl History {
             if self.entries.front() == Some(&line) || line.is_empty() {
                 return;
             }
-            // Add entry to front of history
+            // Add entry to front of history.
             self.entries.push_front(line);
-            // Reset offset to newest entry
+
+            // Reset offset to newest entry.
             self.current_position = None;
-            // Check if already have enough entries
+
+            // Check if already have enough entries.
             if self.entries.len() > self.max_size {
                 // Remove oldest entry
                 self.entries.pop_back();
@@ -64,7 +67,7 @@ impl History {
         }
     }
 
-    // Find next history that matches a given string from an index
+    // Find next history that matches a given string from an index.
     pub fn search_next(&mut self, _current: &str) -> Option<&str> {
         if let Some(index) = &mut self.current_position {
             if *index < self.entries.len() - 1 {
@@ -78,7 +81,8 @@ impl History {
             None
         }
     }
-    // Find previous history item that matches a given string from an index
+
+    // Find previous history item that matches a given string from an index.
     pub fn search_previous(&mut self, _current: &str) -> Option<&str> {
         if let Some(index) = &mut self.current_position {
             if *index == 0 {
