@@ -91,7 +91,10 @@ pub enum ReadlineEvent {
 }
 
 impl Readline {
-    /// Create a new instance with an associated [`SharedWriter`]
+    /// Create a new instance with an associated [`SharedWriter`]. You can try out some of
+    /// the following configuration options:
+    /// - [Self::should_print_line_on]
+    /// - [Self::set_max_history]
     pub fn new(prompt: String) -> Result<(Self, SharedWriter), ReadlineError> {
         let (line_sender, line_receiver) = thingbuf::mpsc::channel(CHANNEL_CAPACITY);
 

@@ -16,15 +16,16 @@
  */
 
 use crossterm::style::Stylize;
-use futures_util::FutureExt;
 use miette::IntoDiagnostic;
-use r3bl_terminal_async::{Readline, ReadlineEvent, SharedWriter};
+use r3bl_terminal_async::{Readline, ReadlineEvent, SharedWriter, TerminalAsync};
 use std::{io::Write, ops::ControlFlow, time::Duration};
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter, EnumString};
+use tokio::sync::Mutex;
 use tokio::time::interval;
 use tracing::info;
 
+/// Load dependencies for this examples file.
 mod helpers;
 use helpers::tracing_setup::{self};
 
@@ -115,43 +116,50 @@ impl Default for State {
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-    // Available options for configuration:
-    // readline.should_print_line_on(false, false);
-    // readline.set_max_history(10);
-    let (mut readline, mut stdout) = Readline::new("> ".to_owned()).into_diagnostic()?;
+    let maybe_terminal_async = TerminalAsync::try_new("> ")?;
+
+    // If the terminal is not fully interactive, then return early.
+    let mut terminal_async = match maybe_terminal_async {
+        None => return Ok(()),
+        _ => maybe_terminal_async.unwrap(),
+    };
 
     // Pre-populate the readline's history with some entries.
-    Command::iter().for_each(|command| {
-        readline.add_history_entry(command.to_string());
-    });
+    let readline = terminal_async.clone_readline();
+    for command in Command::iter() {
+        readline.lock().await.add_history_entry(command.to_string());
+    }
 
-    tracing_setup::init(stdout.clone())?;
+    // Initialize tracing w/ the "async stdout".
+    tracing_setup::init(terminal_async.clone_stdout())?;
 
     // Start tasks.
     let mut state = State::default();
     let mut interval_1_task = interval(state.task_1_state.interval_delay);
     let mut interval_2_task = interval(state.task_2_state.interval_delay);
 
-    writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;
+    writeln!(terminal_async.clone_stdout(), "{}", get_info_message()).into_diagnostic()?;
 
     loop {
         tokio::select! {
             _ = interval_1_task.tick() => {
-                task_1::tick(&mut state, &mut stdout)?;
+                task_1::tick(&mut state, &mut terminal_async.clone_stdout())?;
             },
             _ = interval_2_task.tick() => {
-                task_2::tick(&mut state, &mut stdout)?;
+                task_2::tick(&mut state, &mut terminal_async.clone_stdout())?;
             },
-            user_input = readline.readline().fuse() => match user_input {
+            user_input = terminal_async.get_readline_event() => match user_input {
                 Ok(readline_event) => {
                     let continuation = process_input_event::process_readline_event(
-                        readline_event, &mut state, &mut stdout, &mut readline
-                    )?;
+                        readline_event, &mut state, &mut terminal_async.clone_stdout(), readline.clone()
+                    ).await?;
                     if let ControlFlow::Break(_) = continuation { break }
                 },
                 Err(err) => {
-                    writeln!(stdout,"Received err: {}", format!("{:?}",err).red()).into_diagnostic()?;
-                    writeln!(stdout,"{}", "Exiting...".red()).into_diagnostic()?;
+                    let msg_1 = format!("Received err: {}", format!("{:?}",err).red());
+                    let msg_2 = format!("{}", "Exiting...".red());
+                    terminal_async.println(msg_1).await;
+                    terminal_async.println(msg_2).await;
                     break;
                 },
             }
@@ -159,7 +167,7 @@ async fn main() -> miette::Result<()> {
     }
 
     // Flush all writers to stdout
-    readline.flush().await.into_diagnostic()?;
+    let _ = terminal_async.flush().await;
 
     Ok(())
 }
@@ -199,19 +207,19 @@ mod task_2 {
 }
 
 mod process_input_event {
-    use std::str::FromStr;
+    use std::{str::FromStr, sync::Arc};
 
     use super::*;
 
-    pub fn process_readline_event(
+    pub async fn process_readline_event(
         readline_event: ReadlineEvent,
         state: &mut State,
         stdout: &mut SharedWriter,
-        readline: &mut Readline,
+        readline: Arc<Mutex<Readline>>,
     ) -> miette::Result<ControlFlow<()>> {
         match readline_event {
             ReadlineEvent::Line(user_input) => {
-                process_user_input(user_input, state, stdout, readline)
+                process_user_input(user_input, state, stdout, readline).await
             }
             ReadlineEvent::Eof => {
                 writeln!(stdout, "{}", "Exiting due to Eof...".red().bold()).into_diagnostic()?;
@@ -224,15 +232,15 @@ mod process_input_event {
         }
     }
 
-    fn process_user_input(
+    async fn process_user_input(
         user_input: String,
         state: &mut State,
         stdout: &mut SharedWriter,
-        readline: &mut Readline,
+        readline: Arc<Mutex<Readline>>,
     ) -> miette::Result<ControlFlow<()>> {
         // Add to history.
         let line = user_input.trim();
-        readline.add_history_entry(line.to_string());
+        readline.lock().await.add_history_entry(line.to_string());
 
         // Convert line to command. And process it.
         let result_command = Command::from_str(&line.trim().to_lowercase());
@@ -269,11 +277,11 @@ mod process_input_event {
                 }
                 Command::StartPrintouts => {
                     writeln!(stdout, "Printouts started!").into_diagnostic()?;
-                    readline.should_print_line_on(true, true);
+                    readline.lock().await.should_print_line_on(true, true);
                 }
                 Command::StopPrintouts => {
                     writeln!(stdout, "Printouts stopped!").into_diagnostic()?;
-                    readline.should_print_line_on(false, false);
+                    readline.lock().await.should_print_line_on(false, false);
                 }
                 Command::Info => {
                     writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;

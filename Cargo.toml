@@ -9,17 +9,21 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
+# Terminal output.
 crossterm = { version = "0.27.0", features = ["event-stream"] }
+r3bl_tuify = "0.1.25"
 
+# TODO: https://github.com/nazmulidris/r3bl_terminal_async/issues/12
 futures-channel = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
-
 pin-project = "1.0"
 thingbuf = "0.1"
 
+# Unicode support.
 unicode-segmentation = "1.10"
 unicode-width = "0.1"
 
+# Enum to string generation.
 strum = "0.26"
 strum_macros = "0.26"
 
