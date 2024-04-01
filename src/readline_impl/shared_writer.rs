@@ -37,6 +37,10 @@ use thingbuf::mpsc::{errors::TrySendError, Sender};
 /// Data written to a `SharedWriter` is only output when a line feed (`'\n'`) has been
 /// written and either [`crate::Readline::readline()`] or [`crate::Readline::flush()`] is
 /// executing on the associated `Readline` instance.
+///
+/// More info on pinning and async:
+/// - [Pin and Unpin](https://rust-lang.github.io/async-book/04_pinning/01_chapter.html)
+/// - [Async code](https://rust-lang.github.io/async-book/02_execution/01_chapter.html)
 #[pin_project::pin_project]
 pub struct SharedWriter {
     #[pin]

@@ -19,8 +19,11 @@ use crate::{Readline, ReadlineEvent, SharedWriter};
 use crossterm::style::Stylize;
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
-use std::io::Write;
-use std::sync::Arc;
+use r3bl_tuify::{
+    is_fully_uninteractive_terminal, is_stdin_piped, is_stdout_piped, StdinIsPipedResult,
+    StdoutIsPipedResult, TTYResult,
+};
+use std::{io::Write, sync::Arc};
 use tokio::sync::Mutex;
 
 // 01: this is probably the main entry point for the crate ... need docs & examples
@@ -33,13 +36,41 @@ pub struct TerminalAsync {
 // 01: needs tests
 
 impl TerminalAsync {
-    /// Create a new instance of `TerminalAsync`. Example of `prompt` is `"> "`.
-    pub fn try_new(prompt: &str) -> miette::Result<TerminalAsync> {
+    /// Create a new instance of [TerminalAsync]. Example of `prompt` is `"> "`.
+    ///
+    /// ### Returns
+    /// 1. If the terminal is not fully interactive then it will return [None], and won't
+    ///    create the [Readline]. This is when the terminal is not considered fully
+    ///    interactive:
+    ///    - `stdout` is piped, eg: `echo "foo" | cargo run --example spinner`.
+    ///    - or all three `stdin`, `stdout`, `stderr` are not `is_tty`, eg when running in
+    ///      `cargo test`.
+    /// 2. Otherwise, it will return a [TerminalAsync] instance.
+    /// 3. In case there are any issues putting the terminal into raw mode, or getting the
+    ///    terminal size, it will return an error.
+    ///
+    /// More info on terminal piping:
+    /// - <https://unix.stackexchange.com/questions/597083/how-does-piping-affect-stdin>
+    pub fn try_new(prompt: &str) -> miette::Result<Option<TerminalAsync>> {
+        if let StdinIsPipedResult::StdinIsPiped = is_stdin_piped() {
+            return Ok(None);
+        }
+        if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
+            return Ok(None);
+        }
+        if let TTYResult::IsNotInteractive = is_fully_uninteractive_terminal() {
+            return Ok(None);
+        }
+
         let (readline, stdout) = Readline::new(prompt.to_owned()).into_diagnostic()?;
-        Ok(TerminalAsync {
+        Ok(Some(TerminalAsync {
             readline: Arc::new(Mutex::new(readline)),
             stdout,
-        })
+        }))
+    }
+
+    pub fn clone_readline(&self) -> Arc<Mutex<Readline>> {
+        self.readline.clone()
     }
 
     pub fn clone_stdout(&self) -> SharedWriter {

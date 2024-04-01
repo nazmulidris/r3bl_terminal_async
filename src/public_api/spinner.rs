@@ -18,6 +18,9 @@
 use crate::TerminalAsync;
 use crossterm::{cursor::*, style::*, terminal::*, *};
 use miette::miette;
+use r3bl_tuify::{
+    is_fully_uninteractive_terminal, is_stdout_piped, StdoutIsPipedResult, TTYResult,
+};
 use std::io::Write;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::AbortHandle, time::interval};
@@ -26,6 +29,8 @@ use tokio::{sync::Mutex, task::AbortHandle, time::interval};
 pub struct Spinner {
     pub tick_delay: Duration,
     pub message: String,
+    /// This is populated when the task is started. And when the task is stopped, it is
+    /// set to [None].
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
     pub terminal_async: TerminalAsync,
 }
@@ -34,13 +39,54 @@ pub struct Spinner {
 // 01: needs tests
 // 01: check isTTY and disable progress bar if not
 
+mod abort_handle {
+    use super::*;
+
+    pub async fn is_unset(abort_handle: &Arc<Mutex<Option<AbortHandle>>>) -> bool {
+        abort_handle.lock().await.is_none()
+    }
+
+    pub async fn is_set(abort_handle: &Arc<Mutex<Option<AbortHandle>>>) -> bool {
+        abort_handle.lock().await.is_some()
+    }
+
+    pub async fn try_unset(abort_handle: &Arc<Mutex<Option<AbortHandle>>>) -> Option<AbortHandle> {
+        abort_handle.lock().await.take()
+    }
+
+    pub async fn set(abort_handle: &Arc<Mutex<Option<AbortHandle>>>, handle: AbortHandle) {
+        *abort_handle.lock().await = Some(handle);
+    }
+}
+
 impl Spinner {
-    pub async fn start(
+    /// Create a new instance of [Spinner].
+    ///
+    /// ### Returns
+    /// 1. This will return an error if the task is already running.
+    /// 2. If the terminal is not fully interactive then it will return [None], and won't
+    ///    start the task. This is when the terminal is not considered fully interactive:
+    ///    - `stdout` is piped, eg: `echo "foo" | cargo run --example spinner`.
+    ///    - or all three `stdin`, `stdout`, `stderr` are not `is_tty`, eg when running in
+    ///      `cargo test`.
+    /// 3. Otherwise, it will start the task and return a [Spinner] instance.
+    ///
+    /// More info on terminal piping:
+    /// - <https://unix.stackexchange.com/questions/597083/how-does-piping-affect-stdin>
+    pub async fn try_start(
         message: String,
         tick_delay: Duration,
         terminal_async: TerminalAsync,
-    ) -> miette::Result<Spinner> {
-        let mut bar = Spinner {
+    ) -> miette::Result<Option<Spinner>> {
+        if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
+            return Ok(None);
+        }
+        if let TTYResult::IsNotInteractive = is_fully_uninteractive_terminal() {
+            return Ok(None);
+        }
+
+        // Only start the task if the terminal is fully interactive.
+        let mut spinner = Spinner {
             message,
             tick_delay,
             terminal_async,
@@ -48,15 +94,15 @@ impl Spinner {
         };
 
         // Start task and get the abort_handle.
-        let abort_handle = bar.try_start_task().await?;
+        let abort_handle = spinner.try_start_task().await?;
 
         // Save the abort_handle.
-        *bar.abort_handle.lock().await = Some(abort_handle);
+        abort_handle::set(&spinner.abort_handle, abort_handle).await;
 
         // Suspend terminal_async output while spinner is running.
-        bar.terminal_async.suspend().await;
+        spinner.terminal_async.suspend().await;
 
-        Ok(bar)
+        Ok(Some(spinner))
     }
 
     fn get_stdout(&self) -> impl std::io::Write {
@@ -64,7 +110,7 @@ impl Spinner {
     }
 
     async fn try_start_task(&mut self) -> miette::Result<AbortHandle> {
-        if self.abort_handle.lock().await.is_some() {
+        if abort_handle::is_set(&self.abort_handle).await {
             return Err(miette!("Task is already running"));
         }
 
@@ -79,9 +125,9 @@ impl Spinner {
             let message_clone = message.clone();
 
             loop {
-                // If abort_handle is None (`finish_with_message()` has been called), then
-                // break the loop.
-                if abort_handle.lock().await.is_none() {
+                // If abort_handle is None (`stop()` has been called), then break the
+                // loop.
+                if abort_handle::is_unset(&abort_handle).await {
                     break;
                 }
 
@@ -108,7 +154,7 @@ impl Spinner {
 
     pub async fn stop(&mut self, message: &str) {
         // If task is running, abort it. And print "\n".
-        if let Some(abort_handle) = self.abort_handle.lock().await.take() {
+        if let Some(abort_handle) = abort_handle::try_unset(&self.abort_handle).await {
             // Abort the task.
             abort_handle.abort();
 

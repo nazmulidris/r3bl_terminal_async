@@ -26,8 +26,10 @@ const ARTIFICIAL_UI_DELAY: Duration = Duration::from_millis(DELAY_MS * 10);
 pub async fn main() -> miette::Result<()> {
     let terminal_async = TerminalAsync::try_new("$ ")?;
 
-    println!("------------- 2) Example with other output");
-    example_with_other_output(terminal_async.clone()).await?;
+    if let Some(terminal_async) = terminal_async {
+        println!("-------------> Example with other output <-------------");
+        example_with_other_output(terminal_async.clone()).await?;
+    }
 
     Ok(())
 }
@@ -36,7 +38,7 @@ async fn example_with_other_output(terminal_async: TerminalAsync) -> miette::Res
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!("Trying to connect to server on {}", &address);
 
-    let mut spinner = Spinner::start(
+    let mut maybe_spinner = Spinner::try_start(
         message_trying_to_connect.clone(),
         DELAY_UNIT,
         terminal_async.clone(),
@@ -60,7 +62,9 @@ async fn example_with_other_output(terminal_async: TerminalAsync) -> miette::Res
     interval_handle.abort();
 
     // Stop progress bar.
-    spinner.stop("Connected to server").await;
+    if let Some(spinner) = maybe_spinner.as_mut() {
+        spinner.stop("Connected to server").await;
+    }
 
     Ok(())
 }

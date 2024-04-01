@@ -8,12 +8,32 @@
 
 The `r3bl_terminal_async` library lets your CLI program:
 1. Read user input from the terminal line by line, while your program concurrently
-   writing lines to the same terminal.
-2. Generate a progress bar (indeterminate).
+   writes lines to the same terminal. One [`Readline`] instance can spawn many async
+   `stdout` writers ([SharedWriter]) that can write to the terminal concurrently. You
+   use the [`TerminalAsync`] struct to use this functionality. You rarely have to access
+   the underlying [`Readline`] or [`SharedWriter`] directly.
+2. Generate a spinner (indeterminate). This spinner works concurrently with the rest
+   of your program. It suspends the output from all the [`SharedWriter`] instances
+   that are associated with one [`Readline`] instance. This is useful when you want to
+   show a spinner while waiting for a long-running task to complete.
 3. Use tokio tracing with support for concurrent `stout` writes. If you choose to log
    to `stdout` then the concurrent version ([`SharedWriter`]) from this crate will be
    used. This ensures that the concurrent output is supported even for your tracing
    logs to `stdout`.
+
+This crate can detect when your terminal is not in interactive mode. Eg: when you pipe
+the output of your program to another program. In this case, the `readline` feature is
+disabled. Both the [`TerminalAsync`] and [`Spinner`] support this functionality. So if you
+run the examples in this crate, and pipe something into them, they won't do anything. Here's
+an example:
+
+```bash
+# This will work.
+cargo run --examples terminal_async
+
+# This won't do anything. Just exits with no error.
+echo "hello" | cargo run --examples terminal_async
+```
 
 ## Why use this crate
 
@@ -53,8 +73,8 @@ The `r3bl_terminal_async` library lets your CLI program:
 # Examples
 
 ```bash
-cargo run --example readline
-cargo run --example progress_bar
+cargo run --example terminal_async
+cargo run --example spinner
 ```
 
 # How to use this crate
@@ -103,14 +123,14 @@ This is the main entry point for this library.
 - When done, call [`Readline::flush()`] to ensure that all lines written to
   the `SharedWriter` are output.
 
-## [`Spinner::try_new_and_start()`]
+## [`Spinner::try_start()`]
 
-This displays an indeterminate progress bar while waiting for a long-running task to
-complete. The intention with displaying this progress bar is to give the user an
+This displays an indeterminate spinner while waiting for a long-running task to
+complete. The intention with displaying this spinner is to give the user an
 indication that the program is still running and hasn't hung. When other tasks produce
-output concurrently, this progress bar will not be clobbered. It suspends the output
+output concurrently, this spinner will not be clobbered. It suspends the output
 from all the [`SharedWriter`] instances that are associated with one [`Readline`]
-instance. The `spinner.rs` example shows this.
+instance. The `spinner.rs` example shows this (`cargo run --example spinner`).
 
 ## [`tracing_setup::init()`]
 
