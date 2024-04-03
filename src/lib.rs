@@ -194,8 +194,10 @@
 
 pub mod public_api;
 pub mod readline_impl;
+pub mod spinner_impl;
 
 pub use public_api::*;
 pub use readline_impl::*;
+pub use spinner_impl::*;
 
 // 01: reorganize into public api and internal impl modules

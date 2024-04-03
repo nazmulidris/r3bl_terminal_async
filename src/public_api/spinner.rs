@@ -15,24 +15,27 @@
  *   limitations under the License.
  */
 
-use crate::TerminalAsync;
-use crossterm::{cursor::*, style::*, terminal::*, *};
+use crate::{SpinnerRender, SpinnerStyle, TerminalAsync};
 use miette::miette;
 use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdout_piped, StdoutIsPipedResult, TTYResult,
 };
-use std::io::Write;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::AbortHandle, time::interval};
 
 // 01: This needs a TerminalAsync instance to work. So this is not the main entry point for the crate.
 pub struct Spinner {
     pub tick_delay: Duration,
+
     pub message: String,
+
     /// This is populated when the task is started. And when the task is stopped, it is
     /// set to [None].
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+
     pub terminal_async: TerminalAsync,
+
+    pub style: SpinnerStyle,
 }
 
 // 01: needs examples and docs once moved to the other crate
@@ -74,9 +77,10 @@ impl Spinner {
     /// More info on terminal piping:
     /// - <https://unix.stackexchange.com/questions/597083/how-does-piping-affect-stdin>
     pub async fn try_start(
-        message: String,
+        spinner_message: String,
         tick_delay: Duration,
         terminal_async: TerminalAsync,
+        style: SpinnerStyle,
     ) -> miette::Result<Option<Spinner>> {
         if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
             return Ok(None);
@@ -87,10 +91,11 @@ impl Spinner {
 
         // Only start the task if the terminal is fully interactive.
         let mut spinner = Spinner {
-            message,
+            message: spinner_message,
             tick_delay,
             terminal_async,
             abort_handle: Arc::new(Mutex::new(None)),
+            style,
         };
 
         // Start task and get the abort_handle.
@@ -118,33 +123,29 @@ impl Spinner {
         let tick_delay = self.tick_delay;
         let abort_handle = self.abort_handle.clone();
         let mut stdout = self.get_stdout();
+        let style = self.style;
 
         let join_handle = tokio::spawn(async move {
             let mut interval = interval(tick_delay);
+            // Count is used to determine the output.
             let mut count = 0;
             let message_clone = message.clone();
 
             loop {
-                // If abort_handle is None (`stop()` has been called), then break the
+                // Wait for the interval duration.
+                interval.tick().await;
+
+                // If abort_handle is None (ie, `stop()` has been called), then break the
                 // loop.
                 if abort_handle::is_unset(&abort_handle).await {
                     break;
                 }
 
-                interval.tick().await;
+                // Render and paint the output, based on style.
+                let output = style.render_tick(&message_clone, count, 0);
+                style.paint_tick(&output, &mut stdout);
 
-                let output = format!("{}{}", message_clone, ".".repeat(count));
-
-                // Print the output. And make sure to terminate w/ a newline, so that the
-                // output is printed.
-                let _ = execute!(
-                    stdout,
-                    MoveToColumn(0),
-                    Print(format!("{}\n", output)),
-                    MoveUp(1),
-                );
-                let _ = stdout.flush();
-
+                // Increment count to affect the output in the next iteration of this loop.
                 count += 1;
             }
         });
@@ -152,21 +153,16 @@ impl Spinner {
         Ok(join_handle.abort_handle())
     }
 
-    pub async fn stop(&mut self, message: &str) {
+    pub async fn stop(&mut self, final_message: &str) {
         // If task is running, abort it. And print "\n".
         if let Some(abort_handle) = abort_handle::try_unset(&self.abort_handle).await {
             // Abort the task.
             abort_handle.abort();
 
             // Print the final message.
-            let mut stdout = self.get_stdout();
-            let _ = execute!(
-                stdout,
-                MoveToColumn(0),
-                Clear(ClearType::CurrentLine),
-                Print(format!("{}\n", message)),
-            );
-            let _ = stdout.flush();
+            let final_output = self.style.render_final_tick(final_message, 0);
+            self.style
+                .paint_final_tick(&final_output, &mut self.get_stdout());
 
             // Resume terminal_async output.
             self.terminal_async.resume().await;

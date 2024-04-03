@@ -15,26 +15,36 @@
  *   limitations under the License.
  */
 
-use r3bl_terminal_async::{Spinner, TerminalAsync};
+use r3bl_terminal_async::{
+    Spinner, SpinnerStyle, SpinnerTemplate, TerminalAsync, ARTIFICIAL_UI_DELAY, DELAY_MS,
+    DELAY_UNIT,
+};
 use std::time::Duration;
-
-const DELAY_MS: u64 = 100;
-pub const DELAY_UNIT: Duration = Duration::from_millis(DELAY_MS);
-const ARTIFICIAL_UI_DELAY: Duration = Duration::from_millis(DELAY_MS * 10);
+use tokio::{time::Instant, try_join};
 
 #[tokio::main]
 pub async fn main() -> miette::Result<()> {
     let terminal_async = TerminalAsync::try_new("$ ")?;
 
     if let Some(terminal_async) = terminal_async {
-        println!("-------------> Example with other output <-------------");
-        example_with_other_output(terminal_async.clone()).await?;
+        println!("-------------> Example with concurrent output: Dots <-------------");
+        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Dots).await?;
+
+        println!("-------------> Example with concurrent output: Braille <-------------");
+        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Braille).await?;
+
+        println!("-------------> Example with concurrent output: Block <-------------");
+        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Block).await?;
     }
 
     Ok(())
 }
 
-async fn example_with_other_output(terminal_async: TerminalAsync) -> miette::Result<()> {
+#[allow(unused_assignments)]
+async fn example_with_concurrent_output(
+    mut terminal_async: TerminalAsync,
+    template: SpinnerTemplate,
+) -> miette::Result<()> {
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!("Trying to connect to server on {}", &address);
 
@@ -42,24 +52,32 @@ async fn example_with_other_output(terminal_async: TerminalAsync) -> miette::Res
         message_trying_to_connect.clone(),
         DELAY_UNIT,
         terminal_async.clone(),
+        SpinnerStyle {
+            template,
+            ..Default::default()
+        },
     )
     .await?;
 
-    // Start an interval to display output using terminal_async.println_prefixed().
-    let mut terminal_async_clone = terminal_async.clone();
-    let interval_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(DELAY_MS));
+    // Start another task, to simulate some async work, that uses a interval to display
+    // output, for a fixed amount of time, using `terminal_async.println_prefixed()`.
+    let _ = try_join!(tokio::spawn(async move {
+        // To calculate the delay.
+        let duration = ARTIFICIAL_UI_DELAY;
+        let start = Instant::now();
+
+        // Dropping the interval cancels it.
+        let mut interval = tokio::time::interval(Duration::from_millis(DELAY_MS * 5));
+
         loop {
             interval.tick().await;
-            terminal_async_clone.println_prefixed("foo").await;
+            let elapsed = start.elapsed();
+            if elapsed >= duration {
+                break;
+            }
+            terminal_async.println_prefixed("foo").await;
         }
-    });
-
-    // Artificial delay to see the spinner spin.
-    tokio::time::sleep(ARTIFICIAL_UI_DELAY).await;
-
-    // Stop the interval.
-    interval_handle.abort();
+    }));
 
     // Stop progress bar.
     if let Some(spinner) = maybe_spinner.as_mut() {
