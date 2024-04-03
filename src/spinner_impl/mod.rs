@@ -17,8 +17,8 @@
 
 pub mod spinner_constants;
 pub mod spinner_render;
-pub mod style_style;
+pub mod spinner_style;
 
 pub use spinner_constants::*;
 pub use spinner_render::*;
-pub use style_style::*;
+pub use spinner_style::*;
