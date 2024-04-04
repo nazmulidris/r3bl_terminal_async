@@ -15,25 +15,40 @@
  *   limitations under the License.
  */
 
+use crate::{spinner_render::style::style, SpinnerColor};
 use crate::{SpinnerStyle, BLOCK_DOTS, BRAILLE_DOTS};
 use crossterm::{
     cursor::{MoveToColumn, MoveUp},
     execute,
-    style::Print,
+    style::{self, Print, Stylize},
     terminal::{Clear, ClearType},
 };
+use r3bl_tui::to_crossterm_color;
 use std::io::Write;
 
 pub trait SpinnerRender {
-    fn render_tick(&self, message: &str, count: usize, display_width: usize) -> String;
+    fn render_tick(&mut self, message: &str, count: usize, display_width: usize) -> String;
     fn paint_tick(&self, output: &str, writer: &mut impl Write);
     fn render_final_tick(&self, message: &str, display_width: usize) -> String;
     fn paint_final_tick(&self, output: &str, writer: &mut impl Write);
 }
 
+fn apply_color(output: &str, color: &mut SpinnerColor) -> String {
+    let mut it = output.to_string();
+    if let SpinnerColor::ColorWheel(ref mut color_wheel) = color {
+        let maybe_next_color = color_wheel.next_color();
+        if let Some(next_color) = maybe_next_color {
+            let color = to_crossterm_color(next_color);
+            let styled_content = style(output).with(color);
+            it = styled_content.to_string()
+        }
+    }
+    it
+}
+
 impl SpinnerRender for SpinnerStyle {
     // 00: do something w/ display_width
-    fn render_tick(&self, message: &str, count: usize, _display_width: usize) -> String {
+    fn render_tick(&mut self, message: &str, count: usize, _display_width: usize) -> String {
         match self.template {
             crate::SpinnerTemplate::Dots => {
                 format!("{}{}", message, ".".repeat(count))
@@ -41,20 +56,18 @@ impl SpinnerRender for SpinnerStyle {
             crate::SpinnerTemplate::Braille => {
                 // Translate count into the index of the BRAILLE_DOTS array.
                 let index_to_use = count % BRAILLE_DOTS.len();
-                format!("{} {}", BRAILLE_DOTS[index_to_use], message)
+                let output_symbol = BRAILLE_DOTS[index_to_use];
+                let output_symbol = apply_color(output_symbol, &mut self.color);
+                format!("{output_symbol} {message}")
             }
             crate::SpinnerTemplate::Block => {
                 // Translate count into the index of the BLOCK_DOTS array.
                 let index_to_use = count % BLOCK_DOTS.len();
-                format!("{} {}", BLOCK_DOTS[index_to_use], message)
+                let output_symbol = BLOCK_DOTS[index_to_use];
+                let output_symbol = apply_color(output_symbol, &mut self.color);
+                format!("{output_symbol} {message}")
             }
         }
-
-        // 00: Determine the output based on the style color.
-        // match style_color {
-        //     SpinnerColor::None => {}
-        //     SpinnerColor::ColorWheel => todo!(),
-        // }
     }
 
     fn paint_tick(&self, output: &str, writer: &mut impl Write) {

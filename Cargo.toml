@@ -12,6 +12,8 @@ edition = "2021"
 # Terminal output.
 crossterm = { version = "0.27.0", features = ["event-stream"] }
 r3bl_tuify = "0.1.25"
+r3bl_tui = "0.5.2"
+r3bl_rs_utils_core = "0.9.12"
 
 # TODO: https://github.com/nazmulidris/r3bl_terminal_async/issues/12
 futures-channel = "0.3"

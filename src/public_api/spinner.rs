@@ -123,7 +123,7 @@ impl Spinner {
         let tick_delay = self.tick_delay;
         let abort_handle = self.abort_handle.clone();
         let mut stdout = self.get_stdout();
-        let style = self.style;
+        let mut style = self.style.clone();
 
         let join_handle = tokio::spawn(async move {
             let mut interval = interval(tick_delay);
