@@ -15,20 +15,42 @@
  *   limitations under the License.
  */
 
-#[derive(Debug, Clone, Copy)]
+use r3bl_tui::{ColorWheel, ColorWheelConfig, ColorWheelSpeed};
+
+#[derive(Debug, Clone)]
 pub enum SpinnerTemplate {
     Dots,
     Braille,
     Block,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum SpinnerColor {
     None,
-    ColorWheel,
+    ColorWheel(ColorWheel),
 }
 
-#[derive(Debug, Clone, Copy)]
+impl SpinnerColor {
+    /// Gradients: <https://uigradients.com/#JShine>
+    pub fn default_color_wheel() -> SpinnerColor {
+        let color_wheel_config = ColorWheelConfig::Rgb(
+            // Stops.
+            vec!["#12c2e9", "#c471ed", "#f64f59"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            // Speed.
+            ColorWheelSpeed::Fast,
+            // Steps.
+            10,
+        );
+        let mut it = ColorWheel::new(vec![color_wheel_config]);
+        it.generate_color_wheel(None);
+        SpinnerColor::ColorWheel(it)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SpinnerStyle {
     pub template: SpinnerTemplate,
     pub color: SpinnerColor,
@@ -37,8 +59,8 @@ pub struct SpinnerStyle {
 impl Default for SpinnerStyle {
     fn default() -> Self {
         SpinnerStyle {
-            template: SpinnerTemplate::Dots,
-            color: SpinnerColor::None,
+            template: SpinnerTemplate::Braille,
+            color: SpinnerColor::default_color_wheel(),
         }
     }
 }

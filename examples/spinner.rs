@@ -16,8 +16,8 @@
  */
 
 use r3bl_terminal_async::{
-    Spinner, SpinnerStyle, SpinnerTemplate, TerminalAsync, ARTIFICIAL_UI_DELAY, DELAY_MS,
-    DELAY_UNIT,
+    Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync, ARTIFICIAL_UI_DELAY,
+    DELAY_MS, DELAY_UNIT,
 };
 use std::time::Duration;
 use tokio::{time::Instant, try_join};
@@ -27,14 +27,35 @@ pub async fn main() -> miette::Result<()> {
     let terminal_async = TerminalAsync::try_new("$ ")?;
 
     if let Some(terminal_async) = terminal_async {
-        println!("-------------> Example with concurrent output: Dots <-------------");
-        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Dots).await?;
-
         println!("-------------> Example with concurrent output: Braille <-------------");
-        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Braille).await?;
+        example_with_concurrent_output(
+            terminal_async.clone(),
+            SpinnerStyle {
+                template: SpinnerTemplate::Braille,
+                color: SpinnerColor::default_color_wheel(),
+            },
+        )
+        .await?;
 
         println!("-------------> Example with concurrent output: Block <-------------");
-        example_with_concurrent_output(terminal_async.clone(), SpinnerTemplate::Block).await?;
+        example_with_concurrent_output(
+            terminal_async.clone(),
+            SpinnerStyle {
+                template: SpinnerTemplate::Block,
+                color: SpinnerColor::default_color_wheel(),
+            },
+        )
+        .await?;
+
+        println!("-------------> Example with concurrent output: Dots <-------------");
+        example_with_concurrent_output(
+            terminal_async.clone(),
+            SpinnerStyle {
+                template: SpinnerTemplate::Dots,
+                color: SpinnerColor::default_color_wheel(),
+            },
+        )
+        .await?;
     }
 
     Ok(())
@@ -43,7 +64,7 @@ pub async fn main() -> miette::Result<()> {
 #[allow(unused_assignments)]
 async fn example_with_concurrent_output(
     mut terminal_async: TerminalAsync,
-    template: SpinnerTemplate,
+    style: SpinnerStyle,
 ) -> miette::Result<()> {
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!("Trying to connect to server on {}", &address);
@@ -52,10 +73,7 @@ async fn example_with_concurrent_output(
         message_trying_to_connect.clone(),
         DELAY_UNIT,
         terminal_async.clone(),
-        SpinnerStyle {
-            template,
-            ..Default::default()
-        },
+        style,
     )
     .await?;
 
