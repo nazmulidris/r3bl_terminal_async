@@ -67,7 +67,10 @@ async fn example_with_concurrent_output(
     style: SpinnerStyle,
 ) -> miette::Result<()> {
     let address = "127.0.0.1:8000";
-    let message_trying_to_connect = format!("Trying to connect to server on {}", &address);
+    let message_trying_to_connect = format!(
+        "This is a sample indeterminate progress message: trying to connect to server on {}",
+        &address
+    );
 
     let mut maybe_spinner = Spinner::try_start(
         message_trying_to_connect.clone(),
@@ -99,7 +102,9 @@ async fn example_with_concurrent_output(
 
     // Stop progress bar.
     if let Some(spinner) = maybe_spinner.as_mut() {
-        spinner.stop("Connected to server").await;
+        spinner
+            .stop("This is a sample final message for the spinner component: Connected to server")
+            .await;
     }
 
     Ok(())

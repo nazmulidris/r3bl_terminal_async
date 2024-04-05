@@ -26,7 +26,6 @@ use r3bl_tuify::{
 use std::{io::Write, sync::Arc};
 use tokio::sync::Mutex;
 
-// 01: this is probably the main entry point for the crate ... need docs & examples
 #[derive(Clone)]
 pub struct TerminalAsync {
     readline: Arc<Mutex<Readline>>,

@@ -32,7 +32,6 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 pub struct TracingConfig {
     pub writers: Vec<tracing_writer_config::Writer>,
     pub level: tracing::Level,
-    // 01: this should probably be part of Writer::File(PathBuf or String)
     pub tracing_log_file_path_and_prefix: String,
     /// If [Some], then use async writer for [tracing_writer_config::Writer::Stdout].
     pub stdout_override: Option<SharedWriter>,
@@ -41,7 +40,6 @@ pub struct TracingConfig {
 mod tracing_config_impl {
     use super::*;
 
-    // 01: is this really needed?
     impl TracingConfig {
         pub fn new(stdout: Option<SharedWriter>) -> Self {
             Self {

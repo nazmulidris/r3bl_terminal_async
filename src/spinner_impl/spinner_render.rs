@@ -23,7 +23,10 @@ use crossterm::{
     style::{self, Print, Stylize},
     terminal::{Clear, ClearType},
 };
-use r3bl_tui::to_crossterm_color;
+use r3bl_rs_utils_core::ch;
+use r3bl_rs_utils_core::ChUnit;
+use r3bl_tui::convert_from_tui_color_to_crossterm_color;
+use r3bl_tuify::{clip_string_to_width_with_ellipsis, get_terminal_width};
 use std::io::Write;
 
 pub trait SpinnerRender {
@@ -34,38 +37,51 @@ pub trait SpinnerRender {
 }
 
 fn apply_color(output: &str, color: &mut SpinnerColor) -> String {
-    let mut it = output.to_string();
+    let mut return_it = output.to_string();
     if let SpinnerColor::ColorWheel(ref mut color_wheel) = color {
         let maybe_next_color = color_wheel.next_color();
         if let Some(next_color) = maybe_next_color {
-            let color = to_crossterm_color(next_color);
+            let color = convert_from_tui_color_to_crossterm_color(next_color);
             let styled_content = style(output).with(color);
-            it = styled_content.to_string()
+            return_it = styled_content.to_string()
         }
     }
-    it
+    return_it
 }
 
 impl SpinnerRender for SpinnerStyle {
-    // 00: do something w/ display_width
-    fn render_tick(&mut self, message: &str, count: usize, _display_width: usize) -> String {
+    fn render_tick(&mut self, message: &str, count: usize, display_width: usize) -> String {
         match self.template {
             crate::SpinnerTemplate::Dots => {
-                format!("{}{}", message, ".".repeat(count))
+                let padding_right = ".".repeat(count);
+                let clipped_message = clip_string_to_width_with_ellipsis(
+                    message.to_string(),
+                    ch!(display_width) - ch!(padding_right.len()),
+                );
+                let output_message = format!("{clipped_message}{padding_right}");
+                clip_string_to_width_with_ellipsis(output_message, ch!(display_width))
             }
             crate::SpinnerTemplate::Braille => {
                 // Translate count into the index of the BRAILLE_DOTS array.
                 let index_to_use = count % BRAILLE_DOTS.len();
                 let output_symbol = BRAILLE_DOTS[index_to_use];
                 let output_symbol = apply_color(output_symbol, &mut self.color);
-                format!("{output_symbol} {message}")
+                let clipped_message = clip_string_to_width_with_ellipsis(
+                    message.to_string(),
+                    ch!(display_width) - ch!(2),
+                );
+                format!("{output_symbol} {clipped_message}")
             }
             crate::SpinnerTemplate::Block => {
                 // Translate count into the index of the BLOCK_DOTS array.
                 let index_to_use = count % BLOCK_DOTS.len();
                 let output_symbol = BLOCK_DOTS[index_to_use];
                 let output_symbol = apply_color(output_symbol, &mut self.color);
-                format!("{output_symbol} {message}")
+                let clipped_message = clip_string_to_width_with_ellipsis(
+                    message.to_string(),
+                    ch!(display_width) - ch!(2),
+                );
+                format!("{output_symbol} {clipped_message}")
             }
         }
     }
@@ -108,12 +124,13 @@ impl SpinnerRender for SpinnerStyle {
         let _ = writer.flush();
     }
 
-    // 00: do something w/ display_width
-    fn render_final_tick(&self, final_message: &str, _display_width: usize) -> String {
+    fn render_final_tick(&self, final_message: &str, display_width: usize) -> String {
+        let clipped_final_message =
+            clip_string_to_width_with_ellipsis(final_message.to_string(), ch!(display_width));
         match self.template {
-            crate::SpinnerTemplate::Dots => final_message.to_string(),
-            crate::SpinnerTemplate::Braille => final_message.to_string(),
-            crate::SpinnerTemplate::Block => final_message.to_string(),
+            crate::SpinnerTemplate::Dots => clipped_final_message.to_string(),
+            crate::SpinnerTemplate::Braille => clipped_final_message.to_string(),
+            crate::SpinnerTemplate::Block => clipped_final_message.to_string(),
         }
     }
 
