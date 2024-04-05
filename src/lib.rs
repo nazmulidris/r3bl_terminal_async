@@ -44,6 +44,12 @@
 //! echo "hello" | cargo run --examples terminal_async
 //! ```
 //!
+//! Here is a video of the `terminal_async` example in action:
+//! ![terminal_async_video](https://github.com/nazmulidris/r3bl_terminal_async/blob/main/docs/clip-terminal-async.gif?raw=true)
+//!
+//! Here is a video of the `spinner` example in action:
+//! ![spinner_video](https://github.com/nazmulidris/r3bl_terminal_async/blob/main/docs/clip-spinner.gif?raw=true)
+//!
 //! ## Why use this crate
 //!
 //! 1. Because
