@@ -1211,8 +1211,6 @@ dependencies = [
 [[package]]
 name = "r3bl_ansi_color"
 version = "0.6.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60454e5ba19194a4b76f5a46ea68ffe0ec5d49710d3d077858563c4d55c4cbb4"
 dependencies = [
  "is-terminal",
  "is_ci",
@@ -1221,8 +1219,6 @@ dependencies = [
 [[package]]
 name = "r3bl_rs_utils_core"
 version = "0.9.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c1620ed8b7f572744c3193a4f5f4191e1c06134c46c8579e7f9689e2d07b555"
 dependencies = [
  "chrono",
  "get-size",
@@ -1233,7 +1229,6 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
- "syntect",
  "time",
  "unicode-segmentation",
  "unicode-width",
@@ -1242,8 +1237,6 @@ dependencies = [
 [[package]]
 name = "r3bl_rs_utils_macro"
 version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ba7c8adc83b335440e27320b713264c6a0c1e36f140ea62555800ef8c4e0e5f"
 dependencies = [
  "paste",
  "proc-macro2",
@@ -1255,8 +1248,6 @@ dependencies = [
 [[package]]
 name = "r3bl_simple_logger"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfeb326ffba6a7132041cb20b245bd61151dc171087b66bb3fe7ec454502c4d4"
 dependencies = [
  "log",
  "r3bl_ansi_color",
@@ -1292,8 +1283,6 @@ dependencies = [
 [[package]]
 name = "r3bl_tui"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c8bb772259f5a9bbfc884d30d6bf8d0010de151ac7501e14fa3b49d31fca3b7"
 dependencies = [
  "chrono",
  "colorgrad",
@@ -1319,8 +1308,6 @@ dependencies = [
 [[package]]
 name = "r3bl_tuify"
 version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64406b013259923e207e2585ce39dc9e93cd6669c4eded5b9b8e0419cfef0e3e"
 dependencies = [
  "clap",
  "crossterm",

@@ -16,6 +16,7 @@
  */
 
 use crate::{SpinnerRender, SpinnerStyle, TerminalAsync};
+use crossterm::terminal;
 use miette::miette;
 use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdout_piped, StdoutIsPipedResult, TTYResult,
@@ -23,7 +24,6 @@ use r3bl_tuify::{
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::AbortHandle, time::interval};
 
-// 01: This needs a TerminalAsync instance to work. So this is not the main entry point for the crate.
 pub struct Spinner {
     pub tick_delay: Duration,
 
@@ -38,9 +38,7 @@ pub struct Spinner {
     pub style: SpinnerStyle,
 }
 
-// 01: needs examples and docs once moved to the other crate
 // 01: needs tests
-// 01: check isTTY and disable progress bar if not
 
 mod abort_handle {
     use super::*;
@@ -142,7 +140,7 @@ impl Spinner {
                 }
 
                 // Render and paint the output, based on style.
-                let output = style.render_tick(&message_clone, count, 0);
+                let output = style.render_tick(&message_clone, count, get_terminal_display_width());
                 style.paint_tick(&output, &mut stdout);
 
                 // Increment count to affect the output in the next iteration of this loop.
@@ -160,12 +158,21 @@ impl Spinner {
             abort_handle.abort();
 
             // Print the final message.
-            let final_output = self.style.render_final_tick(final_message, 0);
+            let final_output = self
+                .style
+                .render_final_tick(final_message, get_terminal_display_width());
             self.style
                 .paint_final_tick(&final_output, &mut self.get_stdout());
 
             // Resume terminal_async output.
             self.terminal_async.resume().await;
         }
+    }
+}
+
+fn get_terminal_display_width() -> usize {
+    match terminal::size() {
+        Ok((columns, _rows)) => columns as usize,
+        Err(_) => 0,
     }
 }
