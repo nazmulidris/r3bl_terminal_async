@@ -16,9 +16,8 @@
  */
 
 use crate::HISTORY_SIZE_MAX;
-use futures_channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures_util::StreamExt;
 use std::collections::VecDeque;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 // 01: add tests
 
@@ -27,13 +26,12 @@ pub struct History {
     pub max_size: usize,
     pub sender: UnboundedSender<String>,
     receiver: UnboundedReceiver<String>,
-
     current_position: Option<usize>,
 }
 
 impl Default for History {
     fn default() -> Self {
-        let (sender, receiver) = mpsc::unbounded();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
         Self {
             entries: Default::default(),
             max_size: HISTORY_SIZE_MAX,
@@ -47,8 +45,8 @@ impl Default for History {
 impl History {
     // Update history entries
     pub async fn update(&mut self) {
-        // Receive a new line
-        if let Some(line) = self.receiver.next().await {
+        // Receive a new line.
+        if let Some(line) = self.receiver.recv().await {
             // Don't add entry if last entry was same, or line was empty.
             if self.entries.front() == Some(&line) || line.is_empty() {
                 return;
