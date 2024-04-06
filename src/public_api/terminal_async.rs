@@ -28,11 +28,11 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct TerminalAsync {
-    readline: Arc<Mutex<Readline>>,
+    arc_mutex_readline: Arc<Mutex<Readline>>,
     stdout: SharedWriter,
 }
 
-// 01: needs tests
+// 01: add tests
 
 impl TerminalAsync {
     /// Create a new instance of [TerminalAsync]. Example of `prompt` is `"> "`.
@@ -63,13 +63,13 @@ impl TerminalAsync {
 
         let (readline, stdout) = Readline::new(prompt.to_owned()).into_diagnostic()?;
         Ok(Some(TerminalAsync {
-            readline: Arc::new(Mutex::new(readline)),
+            arc_mutex_readline: Arc::new(Mutex::new(readline)),
             stdout,
         }))
     }
 
     pub fn clone_readline(&self) -> Arc<Mutex<Readline>> {
-        self.readline.clone()
+        self.arc_mutex_readline.clone()
     }
 
     pub fn clone_stdout(&self) -> SharedWriter {
@@ -78,7 +78,7 @@ impl TerminalAsync {
 
     /// Replacement for [std::io::Stdin::read_line()] (this is async and non blocking).
     pub async fn get_readline_event(&mut self) -> miette::Result<ReadlineEvent> {
-        let mut readline = self.readline.lock().await;
+        let mut readline = self.arc_mutex_readline.lock().await;
         readline.readline().fuse().await.into_diagnostic()
     }
 
@@ -108,19 +108,26 @@ impl TerminalAsync {
     /// Simply flush the buffer. If there's a newline in the buffer, it will be printed.
     /// Otherwise it won't.
     pub async fn flush(&mut self) {
-        let _ = self.readline.lock().await.flush().await;
+        let _ = self.arc_mutex_readline.lock().await.flush().await;
     }
 
     pub async fn suspend(&mut self) {
-        let mut readline = self.readline.lock().await;
+        let mut readline = self.arc_mutex_readline.lock().await;
         readline.suspend().await;
     }
 
     pub async fn resume(&mut self) {
         let this = self.clone();
-        this.readline.lock().await.resume().await;
+        this.arc_mutex_readline.lock().await.resume().await;
 
         let mut this = self.clone();
         this.flush().await;
+    }
+
+    /// Close the underlying [Readline] instance. This will terminate all the tasks that
+    /// are managing [SharedWriter] tasks. This is useful when you want to exit the CLI
+    /// event loop, typically when the user requests it.
+    pub async fn close(&mut self) {
+        self.arc_mutex_readline.lock().await.close();
     }
 }

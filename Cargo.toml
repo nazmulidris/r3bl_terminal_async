@@ -15,11 +15,9 @@ r3bl_tuify = { path = "/home/nazmul/github/r3bl-open-core/tuify" }
 r3bl_tui = { path = "/home/nazmul/github/r3bl-open-core/tui" }
 r3bl_rs_utils_core = { path = "/home/nazmul/github/r3bl-open-core/core" }
 
-# TODO: https://github.com/nazmulidris/r3bl_terminal_async/issues/12
+# Needed for `fuse()`.
 futures-channel = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
-pin-project = "1.0"
-thingbuf = "0.1"
 
 # Unicode support.
 unicode-segmentation = "1.10"

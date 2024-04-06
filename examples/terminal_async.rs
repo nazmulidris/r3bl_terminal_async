@@ -138,7 +138,7 @@ async fn main() -> miette::Result<()> {
     let mut interval_1_task = interval(state.task_1_state.interval_delay);
     let mut interval_2_task = interval(state.task_2_state.interval_delay);
 
-    writeln!(terminal_async.clone_stdout(), "{}", get_info_message()).into_diagnostic()?;
+    terminal_async.println(get_info_message().to_string()).await;
 
     loop {
         tokio::select! {
@@ -215,18 +215,19 @@ mod process_input_event {
         readline_event: ReadlineEvent,
         state: &mut State,
         stdout: &mut SharedWriter,
-        readline: Arc<Mutex<Readline>>,
+        arc_mutex_readline: Arc<Mutex<Readline>>,
     ) -> miette::Result<ControlFlow<()>> {
         match readline_event {
             ReadlineEvent::Line(user_input) => {
-                process_user_input(user_input, state, stdout, readline).await
+                process_user_input(user_input, state, stdout, arc_mutex_readline).await
             }
             ReadlineEvent::Eof => {
                 writeln!(stdout, "{}", "Exiting due to Eof...".red().bold()).into_diagnostic()?;
                 Ok(ControlFlow::Break(()))
             }
             ReadlineEvent::Interrupted => {
-                writeln!(stdout, "{}", "^C pressed...".red().bold()).into_diagnostic()?;
+                writeln!(stdout, "{}", "Exiting due to ^C pressed...".red().bold())
+                    .into_diagnostic()?;
                 Ok(ControlFlow::Break(()))
             }
         }
@@ -236,11 +237,14 @@ mod process_input_event {
         user_input: String,
         state: &mut State,
         stdout: &mut SharedWriter,
-        readline: Arc<Mutex<Readline>>,
+        arc_mutex_readline: Arc<Mutex<Readline>>,
     ) -> miette::Result<ControlFlow<()>> {
         // Add to history.
         let line = user_input.trim();
-        readline.lock().await.add_history_entry(line.to_string());
+        arc_mutex_readline
+            .lock()
+            .await
+            .add_history_entry(line.to_string());
 
         // Convert line to command. And process it.
         let result_command = Command::from_str(&line.trim().to_lowercase());
@@ -251,7 +255,9 @@ mod process_input_event {
             }
             Ok(command) => match command {
                 Command::Exit => {
-                    writeln!(stdout, "{}", "Exiting...".red()).into_diagnostic()?;
+                    writeln!(stdout, "{}", "Exiting due to exit command...".red())
+                        .into_diagnostic()?;
+                    arc_mutex_readline.lock().await.close();
                     return Ok(ControlFlow::Break(()));
                 }
                 Command::StartTask1 => {
@@ -277,11 +283,17 @@ mod process_input_event {
                 }
                 Command::StartPrintouts => {
                     writeln!(stdout, "Printouts started!").into_diagnostic()?;
-                    readline.lock().await.should_print_line_on(true, true);
+                    arc_mutex_readline
+                        .lock()
+                        .await
+                        .should_print_line_on(true, true);
                 }
                 Command::StopPrintouts => {
                     writeln!(stdout, "Printouts stopped!").into_diagnostic()?;
-                    readline.lock().await.should_print_line_on(false, false);
+                    arc_mutex_readline
+                        .lock()
+                        .await
+                        .should_print_line_on(false, false);
                 }
                 Command::Info => {
                     writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;

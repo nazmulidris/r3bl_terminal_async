@@ -38,7 +38,7 @@ pub struct Spinner {
     pub style: SpinnerStyle,
 }
 
-// 01: needs tests
+// 01: add tests
 
 mod abort_handle {
     use super::*;

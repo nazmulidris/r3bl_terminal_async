@@ -21,13 +21,11 @@ use crossterm::{
     terminal::{self, disable_raw_mode, Clear},
     QueueableCommand,
 };
-use futures_channel::mpsc;
 use futures_util::{lock::Mutex, select, FutureExt, StreamExt};
 use std::{
     io::{self, stdout, Stdout, Write},
     sync::Arc,
 };
-use thingbuf::mpsc::Receiver;
 use thiserror::Error;
 
 // 01: add tests
@@ -53,12 +51,12 @@ pub struct Readline {
     /// Stream of events.
     event_stream: EventStream,
 
-    line_receiver: Receiver<Text>,
+    line_receiver: tokio::sync::mpsc::Receiver<Text>,
 
     /// Current line.
     line: LineState,
 
-    history_sender: mpsc::UnboundedSender<String>,
+    history_sender: tokio::sync::mpsc::UnboundedSender<String>,
 
     pub(crate) is_suspended: Arc<Mutex<bool>>,
 }
@@ -96,7 +94,7 @@ impl Readline {
     /// - [Self::should_print_line_on]
     /// - [Self::set_max_history]
     pub fn new(prompt: String) -> Result<(Self, SharedWriter), ReadlineError> {
-        let (line_sender, line_receiver) = thingbuf::mpsc::channel(CHANNEL_CAPACITY);
+        let (line_sender, line_receiver) = tokio::sync::mpsc::channel::<Text>(CHANNEL_CAPACITY);
 
         terminal::enable_raw_mode()?;
 
@@ -163,11 +161,30 @@ impl Readline {
         if self.is_suspended().await {
             return Ok(());
         }
-        while let Ok(buf) = self.line_receiver.try_recv_ref() {
-            self.line.print_data(&buf, &mut self.raw_term)?;
+
+        // Break out of the loop if the channel is:
+        // 1. closed - This loop does not block when the channel is empty and there's
+        //    nothing to flush.
+        // 2. empty - This is why we use `try_recv()` here, and not `recv()` which would
+        //    block this loop, when the channel is empty.
+        loop {
+            // `try_recv()` will produce an error when the channel is empty or closed.
+            let result = self.line_receiver.try_recv();
+            match result {
+                // Got some data, print it.
+                Ok(buf) => {
+                    self.line.print_data(&buf, &mut self.raw_term)?;
+                }
+                // Closed or empty.
+                Err(_) => {
+                    break;
+                }
+            }
         }
+
         self.line.clear(&mut self.raw_term)?;
         self.raw_term.flush()?;
+
         Ok(())
     }
 
@@ -176,45 +193,56 @@ impl Readline {
     pub async fn readline(&mut self) -> Result<ReadlineEvent, ReadlineError> {
         loop {
             select! {
+                // Poll for events.
                 event = self.event_stream.next().fuse() => match event {
                     Some(Ok(event)) => {
-                        match self.line.handle_event(event, &mut self.raw_term) {
-                            Ok(Some(event)) => {
+                        let result_maybe_readline_event: Result<Option<ReadlineEvent>, ReadlineError> =
+                            self.line.handle_event(event, &mut self.raw_term);
+                        match result_maybe_readline_event {
+                            Ok(Some(readline_event)) => {
                                 self.raw_term.flush()?;
-                                return Result::<_, ReadlineError>::Ok(event)
+                                return Ok(readline_event)
                             },
-                            Err(e) => return Err(e),
                             Ok(None) => self.raw_term.flush()?,
+                            Err(e) => return Err(e),
                         }
                     }
                     Some(Err(e)) => return Err(e.into()),
                     None => {},
                 },
-                result = self.line_receiver.recv_ref().fuse() => {
+
+                // Poll for input.
+                result = self.line_receiver.recv().fuse() => {
                     if self.is_suspended().await {
                         continue;
                     }
                     match result {
-                    Some(buf) => {
-                            self.line.print_data(&buf, &mut self.raw_term)?;
-                            self.raw_term.flush()?;
+                        Some(buf) => {
+                                self.line.print_data(&buf, &mut self.raw_term)?;
+                                self.raw_term.flush()?;
                         },
                         None => return Err(ReadlineError::Closed),
                     }
                 },
-                _ = self.line.history.update().fuse() => {}
+
+                // Poll for history updates.
+                _ = self.line.history.update().fuse() => {
+                    // Do nothing, just wait for the history to update.
+                }
             }
         }
     }
 
     /// Add a line to the input history.
     pub fn add_history_entry(&mut self, entry: String) -> Option<()> {
-        self.history_sender.unbounded_send(entry).ok()
+        self.history_sender.send(entry).ok()
     }
 }
 
 /// Exit raw mode when the instance is dropped.
 impl Drop for Readline {
+    /// There is no need to call [Readline::close()] since as soon as the
+    /// [`Readline::line_receiver`] is dropped, it will shutdown its channel.
     fn drop(&mut self) {
         let _ = disable_raw_mode();
     }
@@ -234,5 +262,16 @@ impl Readline {
     pub async fn resume(&mut self) {
         let mut is_suspended = self.is_suspended.lock().await;
         *is_suspended = false;
+    }
+}
+
+impl Readline {
+    /// Call this to shutdown the [tokio::sync::mpsc::Receiver] and thus the channel
+    /// [tokio::sync::mpsc::channel]. Typically this happens when your CLI wants to exit,
+    /// due to some user input requesting this. This will result in any awaiting tasks in
+    /// various places to error out, which is the desired behavior, rather than just
+    /// hanging, waiting on events that will never happen.
+    pub fn close(&mut self) {
+        self.line_receiver.close();
     }
 }

@@ -16,36 +16,26 @@
  */
 
 use crate::Text;
-use futures_util::{pin_mut, ready, AsyncWrite, FutureExt};
-use std::{
-    io::{self},
-    ops::DerefMut,
-    pin::Pin,
-    task::{Context, Poll},
-};
-use thingbuf::mpsc::{errors::TrySendError, Sender};
+use std::io::{self, Write};
 
 // 01: add tests
 
-/// Cloneable object that implements [`Write`][std::io::Write] and
-/// [`AsyncWrite`][futures_util::AsyncWrite] and allows for sending data to the terminal
-/// without messing up the readline.
+/// Cloneable object that implements [`Write`][std::io::Write] and allows for sending data
+/// to the terminal without messing up the [`crate::Readline`].
 ///
 /// A `SharedWriter` instance is obtained by calling [`crate::Readline::new()`], which
-/// also returns a [crate::`Readline`] instance associated with the writer.
+/// also returns a [`crate::Readline`] instance associated with the writer.
 ///
 /// Data written to a `SharedWriter` is only output when a line feed (`'\n'`) has been
 /// written and either [`crate::Readline::readline()`] or [`crate::Readline::flush()`] is
 /// executing on the associated `Readline` instance.
-///
-/// More info on pinning and async:
-/// - [Pin and Unpin](https://rust-lang.github.io/async-book/04_pinning/01_chapter.html)
-/// - [Async code](https://rust-lang.github.io/async-book/02_execution/01_chapter.html)
-#[pin_project::pin_project]
 pub struct SharedWriter {
-    #[pin]
+    /// Holds the data to be written to the terminal.
     pub(crate) buffer: Text,
-    pub(crate) line_sender: Sender<Text>,
+
+    /// Sender end of the channel, the receiver end is in [`crate::Readline`], which does
+    /// the actual printing to `stdout`.
+    pub(crate) line_sender: tokio::sync::mpsc::Sender<Text>,
 }
 
 impl Clone for SharedWriter {
@@ -57,65 +47,29 @@ impl Clone for SharedWriter {
     }
 }
 
-impl AsyncWrite for SharedWriter {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let mut this = self.project();
-        this.buffer.extend_from_slice(buf);
-        if this.buffer.ends_with(b"\n") {
-            let fut = this.line_sender.send_ref();
-            pin_mut!(fut);
-            let mut send_buf = ready!(fut.poll_unpin(cx)).map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "thingbuf receiver has closed")
-            })?;
-            // Swap buffers
-            std::mem::swap(send_buf.deref_mut(), &mut this.buffer);
-            this.buffer.clear();
-            Poll::Ready(Ok(buf.len()))
-        } else {
-            Poll::Ready(Ok(buf.len()))
-        }
-    }
+impl Write for SharedWriter {
+    fn write(&mut self, payload: &[u8]) -> io::Result<usize> {
+        let self_buffer = &mut self.buffer;
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let mut this = self.project();
-        let fut = this.line_sender.send_ref();
-        pin_mut!(fut);
-        let mut send_buf = ready!(fut.poll_unpin(cx))
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "thingbuf receiver has closed"))?;
-        // Swap buffers
-        std::mem::swap(send_buf.deref_mut(), &mut this.buffer);
-        this.buffer.clear();
-        Poll::Ready(Ok(()))
-    }
+        // Append the payload to self_buffer.
+        self_buffer.extend_from_slice(payload);
 
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl io::Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.buffer.extend_from_slice(buf);
-        if self.buffer.ends_with(b"\n") {
-            match self.line_sender.try_send_ref() {
-                Ok(mut send_buf) => {
-                    std::mem::swap(send_buf.deref_mut(), &mut self.buffer);
-                    self.buffer.clear();
+        // If self_buffer ends with a newline, send it to the line_sender.
+        if self_buffer.ends_with(b"\n") {
+            match self.line_sender.try_send(self_buffer.clone()) {
+                Ok(_) => {
+                    self_buffer.clear();
                 }
-                Err(TrySendError::Full(_)) => return Err(io::ErrorKind::WouldBlock.into()),
-                _ => {
+                Err(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
-                        "thingbuf receiver has closed",
+                        "SharedWriter Receiver has closed",
                     ));
                 }
             }
-        }
-        Ok(buf.len())
+        };
+
+        Ok(payload.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {

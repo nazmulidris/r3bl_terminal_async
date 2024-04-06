@@ -181,22 +181,31 @@
 //! # Why another async readline crate?
 //!
 //! This crate & repo is forked from
-//! [rustyline-async](https://github.com/zyansheep/rustyline-async). Here are some changes
-//! made to the code:
-//! - Drop support for all async runtimes other than `tokio`.
-//! - Drop `simplelog` and `log` dependencies. Add support for `tokio-tracing`. Update all
-//!   the examples.
+//! [rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
+//! been rewritten and rearchitected.Here are some changes made to the code:
+//! - Drop support for all async runtimes other than `tokio`. Rewrite all the code for
+//!   this.
+//! - Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code
+//!   for this.
+//! - Drop `simplelog` and `log` dependencies. Add support for `tokio-tracing`. Rewrite
+//!   all the code for this, and add `tracing_setup.rs`.
 //! - Rewrite main example `examples/readline.rs` to mimic a real world CLI application.
 //!   Add more examples.
+//! - Add `spinner_impl`, `readline_impl`, and `public_api` modules.
 //! - Add tests.
-//! - Add `progress_bar` module.
-//! - Add `tracing_setup` module.
 //!
 //! # Video series on [developerlife.com](https://developerlife.com) [YT channel](https://www.youtube.com/@developerlifecom) on building this crate with Naz
 //!
 //! - [Part 1: Why?](https://youtu.be/6LhVx0xM86c)
 //! - [Part 2: What?](https://youtu.be/3vQJguti02I)
 //! - [Part 3: Do the refactor and rename the crate](https://youtu.be/uxgyZzOmVIw)
+//! - [Part 4: Build the spinner](https://www.youtube.com/watch?v=fcb6rstRniI)
+//! - [Part 5: Add color gradient animation to
+//!   spinner](https://www.youtube.com/watch?v=_QjsGDds270)
+//! - [Testing](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
+//! - Playlists
+//!   - [Build with Naz, async readline and spinner for CLI in Rust](https://www.youtube.com/watch?v=3vQJguti02I&list=PLofhE49PEwmwelPkhfiqdFQ9IXnmGdnSE)
+//!   - [Build with Naz, testing in Rust](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
 
 pub mod public_api;
 pub mod readline_impl;
