@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{SpinnerRender, SpinnerStyle, TerminalAsync};
+use crate::{SpinnerRender, SpinnerStyle};
 use crossterm::terminal;
 use miette::miette;
 use r3bl_tuify::{
@@ -32,8 +32,6 @@ pub struct Spinner {
     /// This is populated when the task is started. And when the task is stopped, it is
     /// set to [None].
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
-
-    pub terminal_async: TerminalAsync,
 
     pub style: SpinnerStyle,
 }
@@ -77,7 +75,6 @@ impl Spinner {
     pub async fn try_start(
         spinner_message: String,
         tick_delay: Duration,
-        terminal_async: TerminalAsync,
         style: SpinnerStyle,
     ) -> miette::Result<Option<Spinner>> {
         if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
@@ -91,7 +88,6 @@ impl Spinner {
         let mut spinner = Spinner {
             message: spinner_message,
             tick_delay,
-            terminal_async,
             abort_handle: Arc::new(Mutex::new(None)),
             style,
         };
@@ -101,9 +97,6 @@ impl Spinner {
 
         // Save the abort_handle.
         abort_handle::set(&spinner.abort_handle, abort_handle).await;
-
-        // Suspend terminal_async output while spinner is running.
-        spinner.terminal_async.suspend().await;
 
         Ok(Some(spinner))
     }
@@ -163,9 +156,6 @@ impl Spinner {
                 .render_final_tick(final_message, get_terminal_display_width());
             self.style
                 .paint_final_tick(&final_output, &mut self.get_stdout());
-
-            // Resume terminal_async output.
-            self.terminal_async.resume().await;
         }
     }
 }

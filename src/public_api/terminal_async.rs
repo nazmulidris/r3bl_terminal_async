@@ -23,13 +23,11 @@ use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdin_piped, is_stdout_piped, StdinIsPipedResult,
     StdoutIsPipedResult, TTYResult,
 };
-use std::{io::Write, sync::Arc};
-use tokio::sync::Mutex;
+use std::io::{stdout, Write};
 
-#[derive(Clone)]
 pub struct TerminalAsync {
-    arc_mutex_readline: Arc<Mutex<Readline>>,
-    stdout: SharedWriter,
+    pub readline: Readline,
+    pub shared_writer: SharedWriter,
 }
 
 // 01: add tests
@@ -61,25 +59,21 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let (readline, stdout) = Readline::new(prompt.to_owned()).into_diagnostic()?;
+        let (readline, stdout) =
+            Readline::new(prompt.to_owned(), Box::new(stdout())).into_diagnostic()?;
         Ok(Some(TerminalAsync {
-            arc_mutex_readline: Arc::new(Mutex::new(readline)),
-            stdout,
+            readline,
+            shared_writer: stdout,
         }))
     }
 
-    pub fn clone_readline(&self) -> Arc<Mutex<Readline>> {
-        self.arc_mutex_readline.clone()
-    }
-
-    pub fn clone_stdout(&self) -> SharedWriter {
-        self.stdout.clone()
+    pub fn clone_shared_writer(&self) -> SharedWriter {
+        self.shared_writer.clone()
     }
 
     /// Replacement for [std::io::Stdin::read_line()] (this is async and non blocking).
     pub async fn get_readline_event(&mut self) -> miette::Result<ReadlineEvent> {
-        let mut readline = self.arc_mutex_readline.lock().await;
-        readline.readline().fuse().await.into_diagnostic()
+        self.readline.readline().fuse().await.into_diagnostic()
     }
 
     /// Don't change the `content`. Print it as is. This works concurrently and is async
@@ -89,7 +83,7 @@ impl TerminalAsync {
     where
         T: std::fmt::Display,
     {
-        let _ = writeln!(self.stdout, "{}", content);
+        let _ = writeln!(self.shared_writer, "{}", content);
     }
 
     /// Prefix the `content` with a color and special characters, then print it.
@@ -98,7 +92,7 @@ impl TerminalAsync {
         T: std::fmt::Display,
     {
         let _ = writeln!(
-            self.stdout,
+            self.shared_writer,
             "{} {}",
             " > ".red().bold().on_dark_grey(),
             content
@@ -108,26 +102,22 @@ impl TerminalAsync {
     /// Simply flush the buffer. If there's a newline in the buffer, it will be printed.
     /// Otherwise it won't.
     pub async fn flush(&mut self) {
-        let _ = self.arc_mutex_readline.lock().await.flush().await;
+        let _ = self.readline.flush().await;
     }
 
     pub async fn suspend(&mut self) {
-        let mut readline = self.arc_mutex_readline.lock().await;
-        readline.suspend().await;
+        self.readline.suspend().await;
     }
 
     pub async fn resume(&mut self) {
-        let this = self.clone();
-        this.arc_mutex_readline.lock().await.resume().await;
-
-        let mut this = self.clone();
-        this.flush().await;
+        self.readline.resume().await;
+        self.flush().await;
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that
     /// are managing [SharedWriter] tasks. This is useful when you want to exit the CLI
     /// event loop, typically when the user requests it.
     pub async fn close(&mut self) {
-        self.arc_mutex_readline.lock().await.close();
+        self.readline.close();
     }
 }

@@ -98,7 +98,7 @@
 //!
 //! This is the main entry point for this library.
 //! 1. You can clone the `TerminalAsync` struct that you get from this method and use it
-//!    in multiple tasks. You can also call [`TerminalAsync::clone_stdout()`] to get a
+//!    in multiple tasks. You can also call [`TerminalAsync::clone_shared_writer()`] to get a
 //!    [`SharedWriter`] instance that you can use to write to `stdout` concurrently, using
 //!    [`std::write!`] or [`std::writeln!`].
 //! 2. To read user input, call [`TerminalAsync::get_readline_event()`].
@@ -182,7 +182,7 @@
 //!
 //! This crate & repo is forked from
 //! [rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
-//! been rewritten and rearchitected.Here are some changes made to the code:
+//! been rewritten and re-architected. Here are some changes made to the code:
 //! - Drop support for all async runtimes other than `tokio`. Rewrite all the code for
 //!   this.
 //! - Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code
