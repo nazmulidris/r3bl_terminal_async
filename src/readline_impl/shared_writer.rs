@@ -20,7 +20,7 @@ use std::io::{self, Write};
 
 // 01: add tests
 
-/// Cloneable object that implements [`Write`][std::io::Write] and allows for sending data
+/// Cloneable object that implements [`Write`] and allows for sending data
 /// to the terminal without messing up the [`crate::Readline`].
 ///
 /// A `SharedWriter` instance is obtained by calling [`crate::Readline::new()`], which

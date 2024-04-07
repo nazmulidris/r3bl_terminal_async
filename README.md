@@ -173,7 +173,7 @@ input line with the following key bindings:
 
 This crate & repo is forked from
 [rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
-been rewritten and rearchitected.Here are some changes made to the code:
+been rewritten and re-architected. Here are some changes made to the code:
 - Drop support for all async runtimes other than `tokio`. Rewrite all the code for
   this.
 - Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code

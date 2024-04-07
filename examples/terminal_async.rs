@@ -21,7 +21,7 @@ use r3bl_terminal_async::{Readline, ReadlineEvent, SharedWriter, TerminalAsync};
 use std::{io::Write, ops::ControlFlow, time::Duration};
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter, EnumString};
-use tokio::sync::Mutex;
+use tokio::select;
 use tokio::time::interval;
 use tracing::info;
 
@@ -125,13 +125,15 @@ async fn main() -> miette::Result<()> {
     };
 
     // Pre-populate the readline's history with some entries.
-    let readline = terminal_async.clone_readline();
+
     for command in Command::iter() {
-        readline.lock().await.add_history_entry(command.to_string());
+        terminal_async
+            .readline
+            .add_history_entry(command.to_string());
     }
 
     // Initialize tracing w/ the "async stdout".
-    tracing_setup::init(terminal_async.clone_stdout())?;
+    tracing_setup::init(terminal_async.clone_shared_writer())?;
 
     // Start tasks.
     let mut state = State::default();
@@ -141,17 +143,17 @@ async fn main() -> miette::Result<()> {
     terminal_async.println(get_info_message().to_string()).await;
 
     loop {
-        tokio::select! {
+        select! {
             _ = interval_1_task.tick() => {
-                task_1::tick(&mut state, &mut terminal_async.clone_stdout())?;
+                task_1::tick(&mut state, &mut terminal_async.clone_shared_writer())?;
             },
             _ = interval_2_task.tick() => {
-                task_2::tick(&mut state, &mut terminal_async.clone_stdout())?;
+                task_2::tick(&mut state, &mut terminal_async.clone_shared_writer())?;
             },
             user_input = terminal_async.get_readline_event() => match user_input {
                 Ok(readline_event) => {
                     let continuation = process_input_event::process_readline_event(
-                        readline_event, &mut state, &mut terminal_async.clone_stdout(), readline.clone()
+                        readline_event, &mut state, &mut terminal_async.clone_shared_writer(), &mut terminal_async.readline
                     ).await?;
                     if let ControlFlow::Break(_) = continuation { break }
                 },
@@ -207,7 +209,7 @@ mod task_2 {
 }
 
 mod process_input_event {
-    use std::{str::FromStr, sync::Arc};
+    use std::str::FromStr;
 
     use super::*;
 
@@ -215,11 +217,11 @@ mod process_input_event {
         readline_event: ReadlineEvent,
         state: &mut State,
         stdout: &mut SharedWriter,
-        arc_mutex_readline: Arc<Mutex<Readline>>,
+        readline: &mut Readline,
     ) -> miette::Result<ControlFlow<()>> {
         match readline_event {
             ReadlineEvent::Line(user_input) => {
-                process_user_input(user_input, state, stdout, arc_mutex_readline).await
+                process_user_input(user_input, state, stdout, readline).await
             }
             ReadlineEvent::Eof => {
                 writeln!(stdout, "{}", "Exiting due to Eof...".red().bold()).into_diagnostic()?;
@@ -237,14 +239,11 @@ mod process_input_event {
         user_input: String,
         state: &mut State,
         stdout: &mut SharedWriter,
-        arc_mutex_readline: Arc<Mutex<Readline>>,
+        readline: &mut Readline,
     ) -> miette::Result<ControlFlow<()>> {
         // Add to history.
         let line = user_input.trim();
-        arc_mutex_readline
-            .lock()
-            .await
-            .add_history_entry(line.to_string());
+        readline.add_history_entry(line.to_string());
 
         // Convert line to command. And process it.
         let result_command = Command::from_str(&line.trim().to_lowercase());
@@ -257,7 +256,7 @@ mod process_input_event {
                 Command::Exit => {
                     writeln!(stdout, "{}", "Exiting due to exit command...".red())
                         .into_diagnostic()?;
-                    arc_mutex_readline.lock().await.close();
+                    readline.close();
                     return Ok(ControlFlow::Break(()));
                 }
                 Command::StartTask1 => {
@@ -283,17 +282,11 @@ mod process_input_event {
                 }
                 Command::StartPrintouts => {
                     writeln!(stdout, "Printouts started!").into_diagnostic()?;
-                    arc_mutex_readline
-                        .lock()
-                        .await
-                        .should_print_line_on(true, true);
+                    readline.should_print_line_on(true, true);
                 }
                 Command::StopPrintouts => {
                     writeln!(stdout, "Printouts stopped!").into_diagnostic()?;
-                    arc_mutex_readline
-                        .lock()
-                        .await
-                        .should_print_line_on(false, false);
+                    readline.should_print_line_on(false, false);
                 }
                 Command::Info => {
                     writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;

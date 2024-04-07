@@ -34,18 +34,18 @@ use crate::{History, ReadlineError, ReadlineEvent};
 #[derive(Default)]
 pub struct LineState {
     /// Unicode line.
-    line: String,
+    pub line: String,
 
     /// Index of grapheme in line.
-    line_cursor_grapheme: usize,
+    pub line_cursor_grapheme: usize,
 
     /// Column of grapheme in line.
-    current_column: u16,
+    pub current_column: u16,
 
     /// buffer for holding partial grapheme clusters as they come in
-    cluster_buffer: String,
+    pub cluster_buffer: String,
 
-    prompt: String,
+    pub prompt: String,
 
     /// After pressing enter, should we print the line just submitted?
     pub should_print_line_on_enter: bool,
@@ -53,10 +53,10 @@ pub struct LineState {
     /// After pressing control_c should we print the line just cancelled?
     pub should_print_line_on_control_c: bool,
 
-    last_line_length: usize,
-    last_line_completed: bool,
+    pub last_line_length: usize,
+    pub last_line_completed: bool,
 
-    term_size: (u16, u16),
+    pub term_size: (u16, u16),
 
     pub history: History,
 }
