@@ -15,13 +15,13 @@
  *   limitations under the License.
  */
 
-use crate::{LineState, SharedWriter};
+use crate::{FuturesMutex, LineState, SharedWriter, StdMutex};
 use crossterm::{
     event::{Event, EventStream},
     terminal::{self, disable_raw_mode, Clear},
     QueueableCommand,
 };
-use futures_util::{lock::Mutex, select, stream::StreamExt, FutureExt};
+use futures_util::{select, stream::StreamExt, FutureExt};
 use std::{
     io::{self, Error, Write},
     sync::Arc,
@@ -46,7 +46,7 @@ pub const HISTORY_SIZE_MAX: usize = 1000;
 /// 1. While retrieving input with [`readline()`][Readline::readline].
 /// 2. By calling [`flush()`][Readline::flush].
 pub struct Readline {
-    pub raw_term: Box<dyn Write>,
+    pub raw_term: Arc<StdMutex<dyn Write>>,
 
     /// Stream of events.
     pub event_stream: EventStream,
@@ -66,7 +66,7 @@ pub struct Readline {
     ///   - [`Self::is_suspended()`],
     ///   - [`Self::suspend()`], and
     ///   - [`Self::resume()`].
-    pub is_suspended: Arc<Mutex<bool>>,
+    pub is_suspended: Arc<FuturesMutex<bool>>,
 }
 
 /// Error returned from [`readline()`][Readline::readline]. Such errors generally require
@@ -127,7 +127,7 @@ impl Readline {
     /// - [Self::set_max_history]
     pub fn new(
         prompt: String,
-        write: Box<dyn Write>,
+        raw_term: Arc<StdMutex<dyn Write + 'static>>,
     ) -> Result<(Self, SharedWriter), ReadlineError> {
         let (line_sender, line_receiver) = tokio::sync::mpsc::channel::<Text>(CHANNEL_CAPACITY);
 
@@ -136,18 +136,24 @@ impl Readline {
         let line = LineState::new(prompt, terminal::size()?);
         let history_sender = line.history.sender.clone();
 
-        let mut readline = Readline {
-            raw_term: write,
+        let readline = Readline {
+            raw_term,
             event_stream: EventStream::new(),
             line_receiver,
             line_state: line,
             history_sender,
-            is_suspended: Arc::new(Mutex::new(false)),
+            is_suspended: Arc::new(FuturesMutex::new(false)),
         };
 
-        readline.line_state.render(&mut readline.raw_term)?;
-        readline.raw_term.queue(terminal::EnableLineWrap)?;
-        readline.raw_term.flush()?;
+        readline
+            .line_state
+            .render(&mut *readline.raw_term.lock().unwrap())?;
+        readline
+            .raw_term
+            .lock()
+            .unwrap()
+            .queue(terminal::EnableLineWrap)?;
+        readline.raw_term.lock().unwrap().flush()?;
 
         let shared_writer = SharedWriter {
             line_sender,
@@ -159,15 +165,20 @@ impl Readline {
 
     /// Change the prompt.
     pub fn update_prompt(&mut self, prompt: &str) -> Result<(), ReadlineError> {
-        self.line_state.update_prompt(prompt, &mut self.raw_term)?;
+        self.line_state
+            .update_prompt(prompt, &mut *self.raw_term.lock().unwrap())?;
         Ok(())
     }
 
     /// Clear the screen.
     pub fn clear(&mut self) -> Result<(), ReadlineError> {
-        self.raw_term.queue(Clear(terminal::ClearType::All))?;
-        self.line_state.clear_and_render(&mut self.raw_term)?;
-        self.raw_term.flush()?;
+        self.raw_term
+            .lock()
+            .unwrap()
+            .queue(Clear(terminal::ClearType::All))?;
+        self.line_state
+            .clear_and_render(&mut *self.raw_term.lock().unwrap())?;
+        self.raw_term.lock().unwrap().flush()?;
         Ok(())
     }
 
@@ -208,7 +219,8 @@ impl Readline {
             match result {
                 // Got some data, print it.
                 Ok(buf) => {
-                    self.line_state.print_data(&buf, &mut self.raw_term)?;
+                    self.line_state
+                        .print_data(&buf, &mut *self.raw_term.lock().unwrap())?;
                 }
                 // Closed or empty.
                 Err(_) => {
@@ -217,8 +229,8 @@ impl Readline {
             }
         }
 
-        self.line_state.clear(&mut self.raw_term)?;
-        self.raw_term.flush()?;
+        self.line_state.clear(&mut *self.raw_term.lock().unwrap())?;
+        self.raw_term.lock().unwrap().flush()?;
 
         Ok(())
     }
@@ -233,7 +245,7 @@ impl Readline {
                     match readline_internal::process_event(
                         maybe_result_crossterm_event,
                         &mut self.line_state,
-                        &mut self.raw_term
+                        &mut *self.raw_term.lock().unwrap()
                     ) {
                         ControlFlow::ReturnOk(ok_value) => {return Ok(ok_value);},
                         ControlFlow::ReturnError(err_value) => {return Err(err_value);},
@@ -247,7 +259,7 @@ impl Readline {
                         self.is_suspended().await,
                         result,
                         &mut self.line_state,
-                        &mut self.raw_term
+                        &mut *self.raw_term.lock().unwrap()
                     ) {
                         ControlFlow::ReturnError(err_value) => { return Err(err_value); },
                         ControlFlow::Continue => {}
@@ -283,7 +295,7 @@ pub mod readline_internal {
         is_suspended: bool,
         result: Option<Text>,
         self_line_state: &mut LineState,
-        self_raw_term: &mut impl Write,
+        self_raw_term: &mut dyn Write,
     ) -> ControlFlow<(), ReadlineError> {
         if is_suspended {
             return ControlFlow::Continue;
@@ -307,7 +319,7 @@ pub mod readline_internal {
     pub fn process_event(
         maybe_result_crossterm_event: Option<Result<Event, Error>>,
         self_line_state: &mut LineState,
-        self_raw_term: &mut impl Write,
+        self_raw_term: &mut dyn Write,
     ) -> ControlFlow<ReadlineEvent, ReadlineError> {
         if let Some(result_crossterm_event) = maybe_result_crossterm_event {
             match result_crossterm_event {
@@ -376,9 +388,10 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use strip_ansi_escapes::strip;
+
     #[derive(Clone)]
     pub struct StdoutMock {
-        pub buffer: Arc<std::sync::Mutex<Vec<u8>>>,
+        pub buffer: Arc<StdMutex<Vec<u8>>>,
     }
 
     impl Write for StdoutMock {
@@ -405,15 +418,18 @@ mod tests {
         };
 
         // We will get the `line_state` out of this to test.
-        let (mut readline, _) =
-            Readline::new(prompt_str.into(), Box::new(stdout_mock.clone())).unwrap();
+        let (mut readline, _) = Readline::new(
+            prompt_str.into(),
+            Arc::new(StdMutex::new(stdout_mock.clone())),
+        )
+        .unwrap();
 
         // Simulate 'a'.
         let event = iter.next().unwrap();
         let control_flow = readline_internal::process_event(
             Some(Ok(event.clone())),
             &mut readline.line_state,
-            &mut readline.raw_term,
+            &mut *readline.raw_term.lock().unwrap(),
         );
 
         assert!(matches!(control_flow, ControlFlow::Continue));
