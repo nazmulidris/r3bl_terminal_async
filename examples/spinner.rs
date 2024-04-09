@@ -51,7 +51,7 @@ pub async fn main() -> miette::Result<()> {
 
 #[allow(unused_assignments)]
 async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<()> {
-    let terminal_async = TerminalAsync::try_new("$ ")?;
+    let terminal_async = TerminalAsync::try_new("$ ").await?;
     let mut terminal_async = terminal_async.expect("terminal is not fully interactive");
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!(
@@ -61,7 +61,15 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
 
     let mut shared_writer = terminal_async.clone_shared_writer();
 
+    // 00: cleanup
+    let flush_signal_sender = terminal_async.clone_flush_signal_sender();
+
     // Suspend terminal.
+    // 00: cleanup
+    // flush_signal_sender
+    //     .send(ReadlineFlushSignal::Suspend)
+    //     .await
+    //     .into_diagnostic()?;
     terminal_async.suspend().await;
 
     let mut maybe_spinner =
@@ -95,6 +103,11 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
     }
 
     // Resume terminal.
+    // 00: cleanup
+    // flush_signal_sender
+    //     .send(ReadlineFlushSignal::Resume)
+    //     .await
+    //     .into_diagnostic()?;
     terminal_async.resume().await;
 
     Ok(())

@@ -116,7 +116,7 @@ impl Default for State {
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-    let maybe_terminal_async = TerminalAsync::try_new("> ")?;
+    let maybe_terminal_async = TerminalAsync::try_new("> ").await?;
 
     // If the terminal is not fully interactive, then return early.
     let mut terminal_async = match maybe_terminal_async {
@@ -282,11 +282,11 @@ mod process_input_event {
                 }
                 Command::StartPrintouts => {
                     writeln!(stdout, "Printouts started!").into_diagnostic()?;
-                    readline.should_print_line_on(true, true);
+                    readline.should_print_line_on(true, true).await;
                 }
                 Command::StopPrintouts => {
                     writeln!(stdout, "Printouts stopped!").into_diagnostic()?;
-                    readline.should_print_line_on(false, false);
+                    readline.should_print_line_on(false, false).await;
                 }
                 Command::Info => {
                     writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;
