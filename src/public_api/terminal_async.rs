@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{Readline, ReadlineEvent, SharedWriter};
+use crate::{Readline, ReadlineEvent, SharedWriter, StdMutex};
 use crossterm::style::Stylize;
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
@@ -23,7 +23,10 @@ use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdin_piped, is_stdout_piped, StdinIsPipedResult,
     StdoutIsPipedResult, TTYResult,
 };
-use std::io::{stdout, Write};
+use std::{
+    io::{stdout, Write},
+    sync::Arc,
+};
 
 pub struct TerminalAsync {
     pub readline: Readline,
@@ -60,7 +63,8 @@ impl TerminalAsync {
         }
 
         let (readline, stdout) =
-            Readline::new(prompt.to_owned(), Box::new(stdout())).into_diagnostic()?;
+            Readline::new(prompt.to_owned(), Arc::new(StdMutex::new(stdout())))
+                .into_diagnostic()?;
         Ok(Some(TerminalAsync {
             readline,
             shared_writer: stdout,

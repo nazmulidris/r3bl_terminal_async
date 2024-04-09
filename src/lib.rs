@@ -214,3 +214,6 @@ pub mod spinner_impl;
 pub use public_api::*;
 pub use readline_impl::*;
 pub use spinner_impl::*;
+
+pub type StdMutex<T> = std::sync::Mutex<T>;
+pub type FuturesMutex<T> = futures_util::lock::Mutex<T>;

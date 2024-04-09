@@ -82,7 +82,7 @@ impl LineState {
     }
 
     /// Move from a position on the line to the start.
-    fn move_to_beginning(&self, term: &mut impl Write, from: u16) -> io::Result<()> {
+    fn move_to_beginning(&self, term: &mut dyn Write, from: u16) -> io::Result<()> {
         let move_up = self.line_height(from.saturating_sub(1));
         term.queue(cursor::MoveToColumn(0))?;
         if move_up != 0 {
@@ -92,7 +92,7 @@ impl LineState {
     }
 
     /// Move from the start of the line to some position.
-    fn move_from_beginning(&self, term: &mut impl Write, to: u16) -> io::Result<()> {
+    fn move_from_beginning(&self, term: &mut dyn Write, to: u16) -> io::Result<()> {
         let line_height = self.line_height(to.saturating_sub(1));
         let line_remaining_len = to % self.term_size.0; // Get the remaining length
         if line_height != 0 {
@@ -139,23 +139,23 @@ impl LineState {
             .last()
     }
 
-    fn reset_cursor(&self, term: &mut impl Write) -> io::Result<()> {
+    fn reset_cursor(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)
     }
 
-    fn set_cursor(&self, term: &mut impl Write) -> io::Result<()> {
+    fn set_cursor(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_from_beginning(term, self.current_column)
     }
 
     /// Clear current line.
-    pub fn clear(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn clear(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)?;
         term.queue(Clear(FromCursorDown))?;
         Ok(())
     }
 
     /// Render line.
-    pub fn render(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn render(&self, term: &mut dyn Write) -> io::Result<()> {
         write!(term, "{}{}", self.prompt, self.line)?;
         let line_len = self.prompt.len() + UnicodeWidthStr::width(&self.line[..]);
         self.move_to_beginning(term, line_len as u16)?;
@@ -164,13 +164,13 @@ impl LineState {
     }
 
     /// Clear line and render.
-    pub fn clear_and_render(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn clear_and_render(&self, term: &mut dyn Write) -> io::Result<()> {
         self.clear(term)?;
         self.render(term)?;
         Ok(())
     }
 
-    pub fn print_data(&mut self, data: &[u8], term: &mut impl Write) -> Result<(), ReadlineError> {
+    pub fn print_data(&mut self, data: &[u8], term: &mut dyn Write) -> Result<(), ReadlineError> {
         self.clear(term)?;
 
         // If last written data was not newline, restore the cursor
@@ -208,7 +208,7 @@ impl LineState {
         Ok(())
     }
 
-    pub fn print(&mut self, string: &str, term: &mut impl Write) -> Result<(), ReadlineError> {
+    pub fn print(&mut self, string: &str, term: &mut dyn Write) -> Result<(), ReadlineError> {
         self.print_data(string.as_bytes(), term)?;
         Ok(())
     }
@@ -216,7 +216,7 @@ impl LineState {
     pub fn update_prompt(
         &mut self,
         prompt: &str,
-        term: &mut impl Write,
+        term: &mut dyn Write,
     ) -> Result<(), ReadlineError> {
         self.clear(term)?;
         self.prompt.clear();
@@ -231,7 +231,7 @@ impl LineState {
     pub fn handle_event(
         &mut self,
         event: Event,
-        term: &mut impl Write,
+        term: &mut dyn Write,
     ) -> Result<Option<ReadlineEvent>, ReadlineError> {
         match event {
             // Control Keys
