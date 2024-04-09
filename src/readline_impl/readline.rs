@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{FuturesMutex, LineState, SharedWriter, StdMutex};
+use crate::{FuturesMutex, LineState, RawTerm, SharedWriter};
 use crossterm::{
     event::{Event, EventStream},
     terminal::{self, disable_raw_mode, Clear},
@@ -46,7 +46,7 @@ pub const HISTORY_SIZE_MAX: usize = 1000;
 /// 1. While retrieving input with [`readline()`][Readline::readline].
 /// 2. By calling [`flush()`][Readline::flush].
 pub struct Readline {
-    pub raw_term: Arc<StdMutex<dyn Write>>,
+    pub raw_term: RawTerm,
 
     /// Stream of events.
     pub event_stream: EventStream,
@@ -67,6 +67,8 @@ pub struct Readline {
     ///   - [`Self::suspend()`], and
     ///   - [`Self::resume()`].
     pub is_suspended: Arc<FuturesMutex<bool>>,
+    pub flush_signal_sender: tokio::sync::mpsc::Sender<ReadlineFlushSignal>,
+    pub monitor_flush_signal_receiver_task: tokio::task::JoinHandle<()>,
 }
 
 /// Error returned from [`readline()`][Readline::readline]. Such errors generally require
@@ -94,6 +96,16 @@ pub enum ReadlineEvent {
 
     /// The user pressed Ctrl-C.
     Interrupted,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ReadlineFlushSignal {
+    /// Flush the buffer.
+    Flush,
+    /// Suspend the `Readline` instance.
+    Suspend,
+    /// Resume the `Readline` instance.
+    Resume,
 }
 
 // 00: clean this up
@@ -125,16 +137,43 @@ impl Readline {
     /// the following configuration options:
     /// - [Self::should_print_line_on]
     /// - [Self::set_max_history]
-    pub fn new(
-        prompt: String,
-        raw_term: Arc<StdMutex<dyn Write + 'static>>,
-    ) -> Result<(Self, SharedWriter), ReadlineError> {
+    pub fn new(prompt: String, raw_term: RawTerm) -> Result<(Self, SharedWriter), ReadlineError> {
         let (line_sender, line_receiver) = tokio::sync::mpsc::channel::<Text>(CHANNEL_CAPACITY);
+        let (flush_signal_sender, mut flush_signal_receiver) =
+            tokio::sync::mpsc::channel::<ReadlineFlushSignal>(CHANNEL_CAPACITY);
+
+        let is_suspended = Arc::new(FuturesMutex::new(false));
 
         terminal::enable_raw_mode()?;
 
         let line = LineState::new(prompt, terminal::size()?);
         let history_sender = line.history.sender.clone();
+
+        // 00: move this into its oww method below
+        // Spawn a task to monitor the flush signal channel.
+        let raw_term_clone = raw_term.clone();
+        let is_suspended_clone = is_suspended.clone();
+        let monitor_flush_signal_receiver_task = tokio::spawn(async move {
+            // 00: do something with the flush_signal_receiver
+            loop {
+                let maybe_signal = flush_signal_receiver.recv().await;
+                match maybe_signal {
+                    Some(signal) => match signal {
+                        ReadlineFlushSignal::Flush => {
+                            let _ = raw_term_clone.lock().unwrap().flush();
+                        }
+                        ReadlineFlushSignal::Suspend => {
+                            *is_suspended_clone.lock().await = true;
+                        }
+                        ReadlineFlushSignal::Resume => {
+                            *is_suspended_clone.lock().await = false;
+                            let _ = raw_term_clone.lock().unwrap().flush();
+                        }
+                    },
+                    None => break,
+                }
+            }
+        });
 
         let readline = Readline {
             raw_term,
@@ -142,7 +181,9 @@ impl Readline {
             line_receiver,
             line_state: line,
             history_sender,
-            is_suspended: Arc::new(FuturesMutex::new(false)),
+            is_suspended,
+            flush_signal_sender,
+            monitor_flush_signal_receiver_task,
         };
 
         readline
@@ -352,6 +393,7 @@ impl Drop for Readline {
     /// [`Readline::line_receiver`] is dropped, it will shutdown its channel.
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+        self.monitor_flush_signal_receiver_task.abort();
     }
 }
 
@@ -386,6 +428,7 @@ impl Readline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StdMutex;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use strip_ansi_escapes::strip;
 
