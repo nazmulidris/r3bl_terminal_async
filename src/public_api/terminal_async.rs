@@ -62,13 +62,18 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let (readline, stdout) =
-            Readline::new(prompt.to_owned(), Arc::new(StdMutex::new(stdout())))
-                .into_diagnostic()?;
+        let raw_term = Arc::new(StdMutex::new(stdout()));
+        let (readline, stdout) = Readline::new(prompt.to_owned(), raw_term).into_diagnostic()?;
         Ok(Some(TerminalAsync {
             readline,
             shared_writer: stdout,
         }))
+    }
+
+    pub fn clone_flush_signal_sender(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<crate::ReadlineFlushSignal> {
+        self.readline.flush_signal_sender.clone()
     }
 
     pub fn clone_shared_writer(&self) -> SharedWriter {

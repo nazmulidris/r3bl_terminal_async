@@ -217,3 +217,4 @@ pub use spinner_impl::*;
 
 pub type StdMutex<T> = std::sync::Mutex<T>;
 pub type FuturesMutex<T> = futures_util::lock::Mutex<T>;
+pub type RawTerm = std::sync::Arc<StdMutex<dyn std::io::Write + Send>>;
