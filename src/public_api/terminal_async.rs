@@ -38,6 +38,9 @@ pub struct TerminalAsync {
 impl TerminalAsync {
     /// Create a new instance of [TerminalAsync]. Example of `prompt` is `"> "`.
     ///
+    /// This struct is a wrapper around [Readline] and [SharedWriter]. It does check for
+    /// terminal interactivity before creating the [Readline] instance.
+    ///
     /// ### Returns
     /// 1. If the terminal is not fully interactive then it will return [None], and won't
     ///    create the [Readline]. This is when the terminal is not considered fully
@@ -72,12 +75,17 @@ impl TerminalAsync {
         }))
     }
 
-    pub fn clone_flush_signal_sender(
+    /// This sender is used to send signals to the [Readline] instance to suspend, resume,
+    /// flush, etc. This is useful when you want to control the terminal from another
+    /// thread. Here are the possible signals: [crate::ReadlineControlSignal].
+    pub fn clone_control_signal_sender(
         &self,
-    ) -> tokio::sync::mpsc::Sender<crate::ReadlineFlushSignal> {
-        self.readline.flush_signal_sender.clone()
+    ) -> tokio::sync::mpsc::Sender<crate::ReadlineControlSignal> {
+        self.readline.control_signal_sender.clone()
     }
 
+    /// This is useful when you want to write to the terminal concurrently. This is a
+    /// [crate::SharedWriter] that can be cloned and used in other threads.
     pub fn clone_shared_writer(&self) -> SharedWriter {
         self.shared_writer.clone()
     }
@@ -116,20 +124,32 @@ impl TerminalAsync {
         let _ = self.readline.flush().await;
     }
 
+    /// Suspend the terminal. This is useful when you want to pause the terminal, eg:
+    /// when you want to display a [crate::Spinner].
     pub async fn suspend(&mut self) {
-        self.readline.suspend().await;
+        let _ = self
+            .readline
+            .control_signal_sender
+            .send(crate::ReadlineControlSignal::Suspend)
+            .await
+            .into_diagnostic();
     }
 
+    /// Resume the terminal. This is useful when you want to resume the terminal, eg:
+    /// when you want to stop displaying a [crate::Spinner].
     pub async fn resume(&mut self) {
-        self.readline.resume().await;
-        // 00: clean this up
-        // self.flush().await;
+        let _ = self
+            .readline
+            .control_signal_sender
+            .send(crate::ReadlineControlSignal::Resume)
+            .await
+            .into_diagnostic();
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that
     /// are managing [SharedWriter] tasks. This is useful when you want to exit the CLI
     /// event loop, typically when the user requests it.
     pub async fn close(&mut self) {
-        self.readline.close();
+        self.readline.close().await;
     }
 }

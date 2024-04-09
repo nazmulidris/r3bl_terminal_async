@@ -47,8 +47,6 @@ impl History {
     // Update history entries
     pub async fn update(&mut self, maybe_line: Option<String>) {
         // Receive a new line.
-        // 00: cleanup
-        // if let Some(line) = self.receiver.recv().await {}
         if let Some(line) = maybe_line {
             // Don't add entry if last entry was same, or line was empty.
             if self.entries.front() == Some(&line) || line.is_empty() {

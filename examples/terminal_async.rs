@@ -256,7 +256,7 @@ mod process_input_event {
                 Command::Exit => {
                     writeln!(stdout, "{}", "Exiting due to exit command...".red())
                         .into_diagnostic()?;
-                    readline.close();
+                    readline.close().await;
                     return Ok(ControlFlow::Break(()));
                 }
                 Command::StartTask1 => {
