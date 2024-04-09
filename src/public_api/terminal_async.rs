@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{Readline, ReadlineEvent, SharedWriter, StdMutex};
+use crate::{FuturesMutex, Readline, ReadlineEvent, SharedWriter};
 use crossterm::style::Stylize;
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
@@ -51,7 +51,7 @@ impl TerminalAsync {
     ///
     /// More info on terminal piping:
     /// - <https://unix.stackexchange.com/questions/597083/how-does-piping-affect-stdin>
-    pub fn try_new(prompt: &str) -> miette::Result<Option<TerminalAsync>> {
+    pub async fn try_new(prompt: &str) -> miette::Result<Option<TerminalAsync>> {
         if let StdinIsPipedResult::StdinIsPiped = is_stdin_piped() {
             return Ok(None);
         }
@@ -62,8 +62,10 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let raw_term = Arc::new(StdMutex::new(stdout()));
-        let (readline, stdout) = Readline::new(prompt.to_owned(), raw_term).into_diagnostic()?;
+        let raw_term = Arc::new(FuturesMutex::new(stdout()));
+        let (readline, stdout) = Readline::new(prompt.to_owned(), raw_term)
+            .await
+            .into_diagnostic()?;
         Ok(Some(TerminalAsync {
             readline,
             shared_writer: stdout,
@@ -120,7 +122,8 @@ impl TerminalAsync {
 
     pub async fn resume(&mut self) {
         self.readline.resume().await;
-        self.flush().await;
+        // 00: clean this up
+        // self.flush().await;
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that

@@ -25,28 +25,31 @@ pub struct History {
     pub entries: VecDeque<String>,
     pub max_size: usize,
     pub sender: UnboundedSender<String>,
-    receiver: UnboundedReceiver<String>,
     current_position: Option<usize>,
 }
 
-impl Default for History {
-    fn default() -> Self {
+impl History {
+    pub fn new() -> (Self, UnboundedReceiver<String>) {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
-        Self {
-            entries: Default::default(),
-            max_size: HISTORY_SIZE_MAX,
-            sender,
+        (
+            Self {
+                entries: Default::default(),
+                max_size: HISTORY_SIZE_MAX,
+                sender,
+                current_position: Default::default(),
+            },
             receiver,
-            current_position: Default::default(),
-        }
+        )
     }
 }
 
 impl History {
     // Update history entries
-    pub async fn update(&mut self) {
+    pub async fn update(&mut self, maybe_line: Option<String>) {
         // Receive a new line.
-        if let Some(line) = self.receiver.recv().await {
+        // 00: cleanup
+        // if let Some(line) = self.receiver.recv().await {}
+        if let Some(line) = maybe_line {
             // Don't add entry if last entry was same, or line was empty.
             if self.entries.front() == Some(&line) || line.is_empty() {
                 return;
