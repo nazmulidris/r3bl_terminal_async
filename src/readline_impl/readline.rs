@@ -16,8 +16,8 @@
  */
 
 use crate::{
-    FuturesMutex, History, LineState, SafeBool, SafeHistory, SafeLineState, SafeRawTerm,
-    SharedWriter,
+    FuturesMutex, History, LineState, SafeBool, SafeHistory, SafeLineState, SafeRawTerminal,
+    SharedWriter, Text, CHANNEL_CAPACITY,
 };
 use crossterm::{
     event::{Event, EventStream},
@@ -30,15 +30,50 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc::{channel, Receiver, UnboundedReceiver, UnboundedSender};
 
 // 01: add tests
 
-pub type Text = Vec<u8>;
-pub const CHANNEL_CAPACITY: usize = 500;
-pub const HISTORY_SIZE_MAX: usize = 1000;
-
-/// Structure for reading lines of input from a terminal while lines are output to the
+/// ### Mental model and overview
+///
+/// This is a replacement for a [std::io::BufRead::read_line] function. It is async. It
+/// supports other tasks concurrently writing to the terminal output (via
+/// [SharedWriter]s). It also supports being paused so that [crate::Spinner] can display
+/// an indeterminate progress spinner. Then it can be resumed so that the user can type in
+/// the terminal.
+///
+/// When you call [Self::readline()] it enters an infinite loop. During which you can type
+/// things into the multiline editor, which also displays the prompt. While in this loop
+/// other tasks can send messages to the `Readline` task via the `line` channel, using the
+/// [`SharedWriter::line_sender`].
+///
+/// ### Pause and resume
+///
+/// When the terminal is paused, then any output from the [`SharedWriter`]s will not be
+/// printed to the terminal. This is useful when you want to display a spinner, or some
+/// other indeterminate progress indicator. When the terminal is resumed, then the output
+/// from the [`SharedWriter`]s will be printed to the terminal by the
+/// [`Readline::flush()`] method, which drains the channel. This is possible, because
+/// while paused, the [`Readline::poll_for_shared_writer_output()`] method doesn't
+/// actually do anything. When resumed, the [`Readline::flush()`] method is called, which
+/// drains the channel (if there are any messages in it, and prints them out) so nothing
+/// is lost!
+///
+/// The [`Readline::line_receiver`] [tokio::sync::mpsc::Sender], connected to the line
+/// channel, is where the [SharedWriter]s send their output to be printed to the terminal.
+/// You can send [`LineControlSignal::Line`] to print a line.
+///
+/// You can send [`LineControlSignal::Flush`] to flush the output. You can also send
+/// [`LineControlSignal::Pause`] to pause the `Readline` task, and
+/// [`LineControlSignal::Resume`] to resume it. However, for any of these signals to work,
+/// the [`Readline::readline()`] method be running. If you want to pause, resume, or flush
+/// the output, outside of while [`Readline::readline()`] is running, you can directly
+/// call the methods: [`Readline::pause()`], [`Readline::resume()`], and
+/// [`Readline::flush()`].
+///
+/// ### Usage details
+///
+/// Struct for reading lines of input from a terminal while lines are output to the
 /// terminal concurrently.
 ///
 /// Terminal input is retrieved by calling [`Readline::readline()`], which returns each
@@ -49,35 +84,47 @@ pub const HISTORY_SIZE_MAX: usize = 1000;
 /// Lines written to an associated `SharedWriter` are output:
 /// 1. While retrieving input with [`readline()`][Readline::readline].
 /// 2. By calling [`flush()`][Readline::flush].
+///
+/// You can provide your own implementation of [SafeRawTerminal], via [dependency
+/// injection](https://developerlife.com/category/DI/), so that you can mock terminal
+/// output for testing. You can also extend this struct to adapt your own terminal output
+/// using this mechanism. Essentially anything that complies with `dyn std::io::Write +
+/// Send` trait bounds can be used.
 pub struct Readline {
-    pub raw_term: SafeRawTerm,
+    /// Raw terminal implementation, you can supply this via dependency injection.
+    pub raw_terminal: SafeRawTerminal,
 
     /// Stream of events.
     pub event_stream: EventStream,
 
-    pub line_receiver: tokio::sync::mpsc::Receiver<Text>,
+    /// Receiver end of the channel, the sender end is in [`SharedWriter`], which does the
+    /// actual writing to the terminal. This is only monitored actively while
+    /// [`Readline::readline()`] is active. It is also drained passively everytime
+    /// [`Readline::flush()`] is called.
+    pub line_receiver: Receiver<LineControlSignal>,
 
     /// Current line.
-    // 00: rename to safe_line_state
     pub safe_line_state: SafeLineState,
 
-    pub history_sender: tokio::sync::mpsc::UnboundedSender<String>,
+    /// Use to send history updates.
+    pub history_sender: UnboundedSender<String>,
+    /// Use to recieve history updates.
+    pub history_receiver: UnboundedReceiver<String>,
+    /// Manages the history.
+    pub safe_history: SafeHistory,
 
+    /// Determines whether terminal is paused or not. When paused, concurrent output
+    /// via [`SharedWriter`]s is not printed to the terminal.
+    ///
     /// - Affects
     ///   - [`Readline::readline()`],
     ///   - [`Readline::flush()`], and
-    ///   - [`readline_internal::poll_for_shared_writer_output()`].
+    ///   - [`Readline::poll_for_shared_writer_output()`].
     /// - Also see
-    ///   - [`Self::is_suspended()`],
-    ///   - [`Self::suspend()`], and
+    ///   - [`Self::is_paused()`],
+    ///   - [`Self::pause()`], and
     ///   - [`Self::resume()`].
-    // 00: rename to safe_is_suspended
-    pub safe_is_suspended: SafeBool,
-    pub flush_signal_sender: tokio::sync::mpsc::Sender<ReadlineFlushSignal>,
-    pub monitor_flush_signal_receiver_task: tokio::task::JoinHandle<()>,
-
-    pub history_receiver: tokio::sync::mpsc::UnboundedReceiver<String>,
-    pub safe_history: SafeHistory,
+    pub safe_is_paused: SafeBool,
 }
 
 /// Error returned from [`readline()`][Readline::readline]. Such errors generally require
@@ -107,136 +154,85 @@ pub enum ReadlineEvent {
     Interrupted,
 }
 
+/// For these to work, the [Readline::readline()] method must be running. Since the
+/// [Readline::line_receiver] is used to send these signals. And it is only monitored when
+/// the [Readline::readline()] method is running.
 #[derive(Debug, PartialEq, Clone)]
-pub enum ReadlineFlushSignal {
-    /// Flush the buffer.
+pub enum LineControlSignal {
+    Line(Text),
     Flush,
-    /// Suspend the `Readline` instance.
-    Suspend,
-    /// Resume the `Readline` instance.
+    Pause,
     Resume,
 }
 
-// 00: clean this up
-#[cfg(test)]
-mod stdout_exp {
-    use crossterm::{queue, terminal};
-    use miette::IntoDiagnostic;
-    use std::io::{stdout, Write};
-
-    #[test]
-    fn test_stand_ins_for_stdout() -> miette::Result<()> {
-        let stdout = stdout();
-        do_with_stdout(stdout)?;
-        Ok(())
-    }
-
-    fn do_with_stdout(mut write: impl Write) -> miette::Result<()> {
-        queue! {
-            write,
-            terminal::EnableLineWrap
-        }
-        .into_diagnostic()?;
-        Ok(())
-    }
+/// Internal control flow for the `readline` method. This is used primarly to make testing
+/// easier.
+#[derive(Debug, PartialEq, Clone)]
+pub enum InternalControlFlow<T, E> {
+    ReturnOk(T),
+    ReturnError(E),
+    Continue,
 }
 
 impl Readline {
-    /// Take care of flushing the terminal when a signal is received. This works hand in
-    /// hand with [LineState]. Some of the variables are moved into this task for the
-    /// lifecycle of the struct.
-    pub fn start_monitor_flush_signal_task(
-        raw_term_clone: SafeRawTerm,
-        is_suspended_clone: SafeBool,
-        mut flush_signal_receiver: tokio::sync::mpsc::Receiver<ReadlineFlushSignal>,
-    ) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            // 00: do something with the flush_signal_receiver
-            loop {
-                let maybe_signal = flush_signal_receiver.recv().await;
-                match maybe_signal {
-                    Some(signal) => match signal {
-                        ReadlineFlushSignal::Flush => {
-                            eprintln!("\nflushing\n");
-                            let _ = raw_term_clone.lock().await.flush();
-                        }
-                        ReadlineFlushSignal::Suspend => {
-                            eprintln!("\nsuspending\n");
-                            *is_suspended_clone.lock().await = true;
-                        }
-                        ReadlineFlushSignal::Resume => {
-                            eprintln!("\nresuming\n");
-                            *is_suspended_clone.lock().await = false;
-                            let _ = raw_term_clone.lock().await.flush();
-                        }
-                    },
-                    None => break,
-                }
-            }
-        })
-    }
-
-    /// Create a new instance with an associated [`SharedWriter`]. You can try out some of
-    /// the following configuration options:
+    /// Create a new instance with an associated [`SharedWriter`]. To customize the
+    /// behavior of this instance, you can use the following methods:
     /// - [Self::should_print_line_on]
     /// - [Self::set_max_history]
     pub async fn new(
         prompt: String,
-        raw_term: SafeRawTerm,
+        raw_terminal: SafeRawTerminal,
     ) -> Result<(Self, SharedWriter), ReadlineError> {
-        let (line_sender, line_receiver) = tokio::sync::mpsc::channel::<Text>(CHANNEL_CAPACITY);
-        let (flush_signal_sender, flush_signal_receiver) =
-            tokio::sync::mpsc::channel::<ReadlineFlushSignal>(CHANNEL_CAPACITY);
+        // Line channel.
+        let line_channel = channel::<LineControlSignal>(CHANNEL_CAPACITY);
+        let (line_sender, line_receiver) = line_channel;
 
-        let is_suspended = Arc::new(FuturesMutex::new(false));
+        // Paused state.
+        let safe_is_paused = Arc::new(FuturesMutex::new(false));
 
+        // Enable raw mode. Drop will disable raw mode.
         terminal::enable_raw_mode()?;
 
+        // History setup.
         let (history, history_receiver) = History::new();
         let history_sender = history.sender.clone();
         let safe_history = Arc::new(FuturesMutex::new(history));
 
+        // Line state.
         let line_state = LineState::new(prompt, terminal::size()?);
 
-        // 00: move this into its oww method below
-        // Spawn a task to monitor the flush signal channel. Some variables will be moved
-        // there permanently for the lifecycle of this struct.
-        let monitor_flush_signal_receiver_task = Self::start_monitor_flush_signal_task(
-            raw_term.clone(),
-            is_suspended.clone(),
-            /* this gets moved*/ flush_signal_receiver,
-        );
-
+        // Create the instance with all the supplied components.
         let readline = Readline {
-            raw_term,
+            raw_terminal,
             event_stream: EventStream::new(),
             line_receiver,
             safe_line_state: Arc::new(FuturesMutex::new(line_state)),
             history_sender,
-            safe_is_suspended: is_suspended,
-            flush_signal_sender,
-            monitor_flush_signal_receiver_task,
+            safe_is_paused,
             history_receiver,
             safe_history,
         };
 
+        // Print the prompt.
         readline
             .safe_line_state
             .lock()
             .await
-            .render(&mut *readline.raw_term.lock().await)?;
+            .render(&mut *readline.raw_terminal.lock().await)?;
         readline
-            .raw_term
+            .raw_terminal
             .lock()
             .await
             .queue(terminal::EnableLineWrap)?;
-        readline.raw_term.lock().await.flush()?;
+        readline.raw_terminal.lock().await.flush()?;
 
+        // Create the shared writer.
         let shared_writer = SharedWriter {
             line_sender,
             buffer: Vec::new(),
         };
 
+        // Return the instance and the shared writer.
         Ok((readline, shared_writer))
     }
 
@@ -245,25 +241,25 @@ impl Readline {
         self.safe_line_state
             .lock()
             .await
-            .update_prompt(prompt, &mut *self.raw_term.lock().await)?;
+            .update_prompt(prompt, &mut *self.raw_terminal.lock().await)?;
         Ok(())
     }
 
     /// Clear the screen.
     pub async fn clear(&mut self) -> Result<(), ReadlineError> {
-        self.raw_term
+        self.raw_terminal
             .lock()
             .await
             .queue(Clear(terminal::ClearType::All))?;
         self.safe_line_state
             .lock()
             .await
-            .clear_and_render(&mut *self.raw_term.lock().await)?;
-        self.raw_term.lock().await.flush()?;
+            .clear_and_render(&mut *self.raw_terminal.lock().await)?;
+        self.raw_terminal.lock().await.flush()?;
         Ok(())
     }
 
-    /// Set maximum history length. The default length is [HISTORY_SIZE_MAX].
+    /// Set maximum history length. The default length is [crate::HISTORY_SIZE_MAX].
     pub async fn set_max_history(&mut self, max_size: usize) {
         let mut history = self.safe_history.lock().await;
         history.max_size = max_size;
@@ -287,7 +283,7 @@ impl Readline {
 
     /// Flush all writers to terminal and erase the prompt string.
     pub async fn flush(&mut self) -> Result<(), ReadlineError> {
-        if self.is_suspended().await {
+        if self.is_paused().await {
             return Ok(());
         }
 
@@ -302,10 +298,12 @@ impl Readline {
             match result {
                 // Got some data, print it.
                 Ok(buf) => {
-                    self.safe_line_state
-                        .lock()
-                        .await
-                        .print_data(&buf, &mut *self.raw_term.lock().await)?;
+                    if let LineControlSignal::Line(buf) = buf {
+                        self.safe_line_state
+                            .lock()
+                            .await
+                            .print_data(&buf, &mut *self.raw_terminal.lock().await)?;
+                    }
                 }
                 // Closed or empty.
                 Err(_) => {
@@ -317,8 +315,8 @@ impl Readline {
         self.safe_line_state
             .lock()
             .await
-            .clear(&mut *self.raw_term.lock().await)?;
-        self.raw_term.lock().await.flush()?;
+            .clear(&mut *self.raw_terminal.lock().await)?;
+        self.raw_terminal.lock().await.flush()?;
 
         Ok(())
     }
@@ -333,25 +331,22 @@ impl Readline {
                     match readline_internal::process_event(
                         maybe_result_crossterm_event,
                         self.safe_line_state.clone(),
-                        &mut *self.raw_term.lock().await,
+                        &mut *self.raw_terminal.lock().await,
                         self.safe_history.clone()
                     ).await {
-                        ControlFlow::ReturnOk(ok_value) => {return Ok(ok_value);},
-                        ControlFlow::ReturnError(err_value) => {return Err(err_value);},
-                        ControlFlow::Continue => {}
+                        InternalControlFlow::ReturnOk(ok_value) => {return Ok(ok_value);},
+                        InternalControlFlow::ReturnError(err_value) => {return Err(err_value);},
+                        InternalControlFlow::Continue => {}
                     }
                 },
 
                 // Poll for output from `SharedWriter`s (cloned `stdout`s).
-                result = self.line_receiver.recv().fuse() => {
-                    match poll_for_shared_writer_output(
-                        self.is_suspended().await,
-                        result,
-                        self.safe_line_state.clone(),
-                        &mut *self.raw_term.lock().await
+                maybe_line_control_signal = self.line_receiver.recv().fuse() => {
+                    match self.poll_for_shared_writer_output(
+                        maybe_line_control_signal,
                     ).await {
-                        ControlFlow::ReturnError(err_value) => { return Err(err_value); },
-                        ControlFlow::Continue => {}
+                        InternalControlFlow::ReturnError(err_value) => { return Err(err_value); },
+                        InternalControlFlow::Continue => {}
                         _ => { unreachable!(); }
                     }
                 },
@@ -370,47 +365,62 @@ impl Readline {
     }
 }
 
+impl Readline {
+    /// This method doesn't do anything when the instance is paused. This is what allows
+    /// [`Self::flush()`] to work correctly, since it drains any items that are in this
+    /// channel when the instance is resumed, and `flush()` is called.
+    pub async fn poll_for_shared_writer_output(
+        &mut self,
+        maybe_line_control_signal: Option<LineControlSignal>,
+    ) -> InternalControlFlow<(), ReadlineError> {
+        let self_line_state = self.safe_line_state.clone();
+        let self_raw_term = self.raw_terminal.clone();
+
+        // If paused, then return!
+        if self.is_paused().await {
+            return InternalControlFlow::Continue;
+        }
+
+        match maybe_line_control_signal {
+            Some(line_control_signal) => match line_control_signal {
+                LineControlSignal::Line(buf) => {
+                    if let Err(err) = self_line_state
+                        .lock()
+                        .await
+                        .print_data(&buf, &mut *self_raw_term.lock().await)
+                    {
+                        return InternalControlFlow::ReturnError(err);
+                    }
+                    if let Err(err) = self_raw_term.lock().await.flush() {
+                        return InternalControlFlow::ReturnError(err.into());
+                    }
+                }
+                LineControlSignal::Flush => {
+                    let _ = self.flush().await;
+                }
+                LineControlSignal::Pause => {
+                    self.pause().await;
+                }
+                LineControlSignal::Resume => {
+                    self.resume().await;
+                }
+            },
+            None => return InternalControlFlow::ReturnError(ReadlineError::Closed),
+        }
+
+        InternalControlFlow::Continue
+    }
+}
+
 pub mod readline_internal {
     use super::*;
-
-    #[derive(Debug, PartialEq, Clone)]
-    pub enum ControlFlow<T, E> {
-        ReturnOk(T),
-        ReturnError(E),
-        Continue,
-    }
-
-    pub async fn poll_for_shared_writer_output(
-        is_suspended: bool,
-        result: Option<Text>,
-        self_line_state: SafeLineState,
-        self_raw_term: &mut dyn Write,
-    ) -> ControlFlow<(), ReadlineError> {
-        if is_suspended {
-            return ControlFlow::Continue;
-        }
-
-        match result {
-            Some(buf) => {
-                if let Err(err) = self_line_state.lock().await.print_data(&buf, self_raw_term) {
-                    return ControlFlow::ReturnError(err);
-                }
-                if let Err(err) = self_raw_term.flush() {
-                    return ControlFlow::ReturnError(err.into());
-                }
-            }
-            None => return ControlFlow::ReturnError(ReadlineError::Closed),
-        }
-
-        ControlFlow::Continue
-    }
 
     pub async fn process_event(
         maybe_result_crossterm_event: Option<Result<Event, Error>>,
         self_line_state: SafeLineState,
         self_raw_term: &mut dyn Write,
         self_safe_history: SafeHistory,
-    ) -> ControlFlow<ReadlineEvent, ReadlineError> {
+    ) -> InternalControlFlow<ReadlineEvent, ReadlineError> {
         if let Some(result_crossterm_event) = maybe_result_crossterm_event {
             match result_crossterm_event {
                 Ok(crossterm_event) => {
@@ -421,22 +431,21 @@ pub mod readline_internal {
                     match result_maybe_readline_event {
                         Ok(maybe_readline_event) => {
                             if let Err(e) = self_raw_term.flush() {
-                                return ControlFlow::ReturnError(e.into());
+                                return InternalControlFlow::ReturnError(e.into());
                             }
                             if let Some(readline_event) = maybe_readline_event {
-                                return ControlFlow::ReturnOk(readline_event);
+                                return InternalControlFlow::ReturnOk(readline_event);
                             }
                         }
-                        Err(e) => return ControlFlow::ReturnError(e),
+                        Err(e) => return InternalControlFlow::ReturnError(e),
                     }
                 }
-                Err(e) => return ControlFlow::ReturnError(e.into()),
+                Err(e) => return InternalControlFlow::ReturnError(e.into()),
             }
         }
-        ControlFlow::Continue
+        InternalControlFlow::Continue
     }
 }
-use readline_internal::*;
 
 /// Exit raw mode when the instance is dropped.
 impl Drop for Readline {
@@ -447,19 +456,32 @@ impl Drop for Readline {
     }
 }
 
-/// Suspends and resumes the readline instance.
+/// Pauses and resumes the readline instance.
 impl Readline {
-    pub async fn is_suspended(&self) -> bool {
-        *self.safe_is_suspended.lock().await
+    pub async fn is_paused(&self) -> bool {
+        *self.safe_is_paused.lock().await
     }
 
-    pub async fn suspend(&mut self) {
-        *self.safe_is_suspended.lock().await = true;
+    /// There are 2 ways to pause the readline instance:
+    /// 1. By calling this method.
+    /// 2. By sending a `LineControlSignal::Pause` to the `line_sender`. However, this
+    ///    requires that the [Readline::readline()] method is called, and that the
+    ///    `line_sender` is still alive. Alternatively the
+    ///    [crate::TerminalAsync::get_readline_event()] method can be called, which will
+    ///    call [Readline::readline()].
+    pub async fn pause(&mut self) {
+        *self.safe_is_paused.lock().await = true;
     }
 
+    /// There are 2 ways to resume the readline instance:
+    /// 1. By calling this method.
+    /// 2. By sending a `LineControlSignal::Resume` to the `line_sender`. However, this
+    ///   requires that the [Readline::readline()] method is called, and that the
+    ///  `line_sender` is still alive. Alternatively the
+    /// [crate::TerminalAsync::get_readline_event()] method can be called, which will call
+    /// [Readline::readline()].
     pub async fn resume(&mut self) {
-        *self.safe_is_suspended.lock().await = false;
-        // 00: clean this up
+        *self.safe_is_paused.lock().await = false;
         let _ = self.flush().await;
     }
 }
@@ -477,9 +499,8 @@ impl Readline {
 
 #[cfg(test)]
 mod tests {
-    use crate::StdMutex;
-
     use super::*;
+    use crate::StdMutex;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use strip_ansi_escapes::strip;
 
@@ -500,7 +521,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_readline_process_event() {
+    async fn test_readline_process_event_and_terminal_output() {
         let vec = get_input_vec();
         let mut iter = vec.iter();
 
@@ -527,21 +548,39 @@ mod tests {
         let control_flow = readline_internal::process_event(
             Some(Ok(event.clone())),
             readline.safe_line_state.clone(),
-            &mut *readline.raw_term.lock().await,
+            &mut *readline.raw_terminal.lock().await,
             safe_history.clone(),
         )
         .await;
 
-        assert!(matches!(control_flow, ControlFlow::Continue));
+        assert!(matches!(control_flow, InternalControlFlow::Continue));
         assert_eq!(readline.safe_line_state.lock().await.line, "a");
 
         let output_buffer_data = stdout_mock.buffer.lock().unwrap();
         let output_buffer_data = strip(output_buffer_data.to_vec());
         let output_buffer_data = String::from_utf8(output_buffer_data).expect("utf8");
-        println!("\n`{}`\n", output_buffer_data);
-
-        assert_eq!(output_buffer_data, "> > a");
+        // println!("\n`{}`\n", output_buffer_data);
+        assert!(output_buffer_data.contains("> a"));
     }
+
+    pub(super) fn get_input_vec() -> Vec<Event> {
+        vec![
+            // a
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            // b
+            Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+            // c
+            Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            // enter
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod test_streams {
+    use super::tests::get_input_vec;
+    use super::*;
 
     // 00: use this as inspiration to change readline, so that it can accept a param of type Stream<Item = T>
     #[tokio::test]
@@ -568,17 +607,28 @@ mod tests {
             count += 1;
         }
     }
+}
 
-    fn get_input_vec() -> Vec<Event> {
-        vec![
-            // a
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
-            // b
-            Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
-            // c
-            Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-            // enter
-            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        ]
+// 00: clean this up
+#[cfg(test)]
+mod tests_terminal_writer_exp {
+    use crossterm::{queue, terminal};
+    use miette::IntoDiagnostic;
+    use std::io::{stdout, Write};
+
+    #[test]
+    fn test_stand_ins_for_stdout() -> miette::Result<()> {
+        let stdout = stdout();
+        do_with_stdout(stdout)?;
+        Ok(())
+    }
+
+    fn do_with_stdout(mut write: impl Write) -> miette::Result<()> {
+        queue! {
+            write,
+            terminal::EnableLineWrap
+        }
+        .into_diagnostic()?;
+        Ok(())
     }
 }

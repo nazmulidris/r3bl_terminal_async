@@ -15,11 +15,11 @@
  *   limitations under the License.
  */
 
-use crate::{spinner_render::style::style, SpinnerColor};
+use crate::{spinner_render::style::style, SpinnerColor, SpinnerTemplate};
 use crate::{SpinnerStyle, BLOCK_DOTS, BRAILLE_DOTS};
 use crossterm::{
-    cursor::{MoveToColumn, MoveUp},
-    execute,
+    cursor::{MoveDown, MoveToColumn, MoveUp},
+    queue,
     style::{self, Print, Stylize},
     terminal::{Clear, ClearType},
 };
@@ -52,7 +52,7 @@ fn apply_color(output: &str, color: &mut SpinnerColor) -> String {
 impl SpinnerRender for SpinnerStyle {
     fn render_tick(&mut self, message: &str, count: usize, display_width: usize) -> String {
         match self.template {
-            crate::SpinnerTemplate::Dots => {
+            SpinnerTemplate::Dots => {
                 let padding_right = ".".repeat(count);
                 let clipped_message = clip_string_to_width_with_ellipsis(
                     message.to_string(),
@@ -61,7 +61,7 @@ impl SpinnerRender for SpinnerStyle {
                 let output_message = format!("{clipped_message}{padding_right}");
                 clip_string_to_width_with_ellipsis(output_message, ch!(display_width))
             }
-            crate::SpinnerTemplate::Braille => {
+            SpinnerTemplate::Braille => {
                 // Translate count into the index of the BRAILLE_DOTS array.
                 let index_to_use = count % BRAILLE_DOTS.len();
                 let output_symbol = BRAILLE_DOTS[index_to_use];
@@ -72,7 +72,7 @@ impl SpinnerRender for SpinnerStyle {
                 );
                 format!("{output_symbol} {clipped_message}")
             }
-            crate::SpinnerTemplate::Block => {
+            SpinnerTemplate::Block => {
                 // Translate count into the index of the BLOCK_DOTS array.
                 let index_to_use = count % BLOCK_DOTS.len();
                 let output_symbol = BLOCK_DOTS[index_to_use];
@@ -88,20 +88,20 @@ impl SpinnerRender for SpinnerStyle {
 
     fn paint_tick(&self, output: &str, writer: &mut impl Write) {
         match self.template {
-            crate::SpinnerTemplate::Dots => {
+            SpinnerTemplate::Dots => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = execute!(
+                let _ = queue!(
                     writer,
                     MoveToColumn(0),
                     Print(format!("{}\n", output)),
                     MoveUp(1),
                 );
             }
-            crate::SpinnerTemplate::Braille => {
+            SpinnerTemplate::Braille => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = execute!(
+                let _ = queue!(
                     writer,
                     MoveToColumn(0),
                     Clear(ClearType::CurrentLine),
@@ -109,10 +109,10 @@ impl SpinnerRender for SpinnerStyle {
                     MoveUp(1),
                 );
             }
-            crate::SpinnerTemplate::Block => {
+            SpinnerTemplate::Block => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = execute!(
+                let _ = queue!(
                     writer,
                     MoveToColumn(0),
                     Clear(ClearType::CurrentLine),
@@ -128,36 +128,22 @@ impl SpinnerRender for SpinnerStyle {
         let clipped_final_message =
             clip_string_to_width_with_ellipsis(final_message.to_string(), ch!(display_width));
         match self.template {
-            crate::SpinnerTemplate::Dots => clipped_final_message.to_string(),
-            crate::SpinnerTemplate::Braille => clipped_final_message.to_string(),
-            crate::SpinnerTemplate::Block => clipped_final_message.to_string(),
+            SpinnerTemplate::Dots => clipped_final_message.to_string(),
+            SpinnerTemplate::Braille => clipped_final_message.to_string(),
+            SpinnerTemplate::Block => clipped_final_message.to_string(),
         }
     }
 
     fn paint_final_tick(&self, output: &str, writer: &mut impl Write) {
         match self.template {
-            crate::SpinnerTemplate::Dots => {
-                let _ = execute!(
+            SpinnerTemplate::Dots | SpinnerTemplate::Braille | SpinnerTemplate::Block => {
+                let _ = queue!(
                     writer,
                     MoveToColumn(0),
                     Clear(ClearType::CurrentLine),
-                    Print(format!("{}\n", output)),
-                );
-            }
-            crate::SpinnerTemplate::Braille => {
-                let _ = execute!(
-                    writer,
+                    Print(output.to_string()),
+                    MoveDown(1),
                     MoveToColumn(0),
-                    Clear(ClearType::CurrentLine),
-                    Print(format!("{}\n", output)),
-                );
-            }
-            crate::SpinnerTemplate::Block => {
-                let _ = execute!(
-                    writer,
-                    MoveToColumn(0),
-                    Clear(ClearType::CurrentLine),
-                    Print(format!("{}\n", output)),
                 );
             }
         }

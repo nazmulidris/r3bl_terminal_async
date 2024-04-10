@@ -62,20 +62,14 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let raw_term = Arc::new(FuturesMutex::new(stdout()));
-        let (readline, stdout) = Readline::new(prompt.to_owned(), raw_term)
+        let safe_raw_terminal = Arc::new(FuturesMutex::new(stdout()));
+        let (readline, stdout) = Readline::new(prompt.to_owned(), safe_raw_terminal)
             .await
             .into_diagnostic()?;
         Ok(Some(TerminalAsync {
             readline,
             shared_writer: stdout,
         }))
-    }
-
-    pub fn clone_flush_signal_sender(
-        &self,
-    ) -> tokio::sync::mpsc::Sender<crate::ReadlineFlushSignal> {
-        self.readline.flush_signal_sender.clone()
     }
 
     pub fn clone_shared_writer(&self) -> SharedWriter {
@@ -116,14 +110,12 @@ impl TerminalAsync {
         let _ = self.readline.flush().await;
     }
 
-    pub async fn suspend(&mut self) {
-        self.readline.suspend().await;
+    pub async fn pause(&mut self) {
+        self.readline.pause().await;
     }
 
     pub async fn resume(&mut self) {
         self.readline.resume().await;
-        // 00: clean this up
-        // self.flush().await;
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that

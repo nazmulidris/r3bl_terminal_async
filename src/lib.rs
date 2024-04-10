@@ -17,18 +17,26 @@
 
 //! The `r3bl_terminal_async` library lets your CLI program:
 //! 1. Read user input from the terminal line by line, while your program concurrently
-//!    writes lines to the same terminal. One [`Readline`] instance can spawn many async
-//!    `stdout` writers ([SharedWriter]) that can write to the terminal concurrently. You
-//!    use the [`TerminalAsync`] struct to use this functionality. You rarely have to access
-//!    the underlying [`Readline`] or [`SharedWriter`] directly.
-//! 2. Generate a spinner (indeterminate). This spinner works concurrently with the rest
-//!    of your program. It suspends the output from all the [`SharedWriter`] instances
+//!    writes lines to the same terminal. One [`Readline`] instance can be used to spawn
+//!    many async `stdout` writers ([SharedWriter]) that can write to the terminal
+//!    concurrently. For most users the [`TerminalAsync`] struct is the simplest way to
+//!    use this crate. You rarely have to access the underlying [`Readline`] or
+//!    [`SharedWriter`] directly. But you can if you need to. [`SharedWriter`] can be
+//!    cloned and is thread-safe. However, there is only one instance of [`Readline`] per
+//!    [`TerminalAsync`] instance.
+//! 2. Generate a spinner (indeterminate progress). This spinner works concurrently with
+//!    the rest of your program. You have to call this while the [`Readline::readline()`]
+//!    is active, which also happens when [`TerminalAsync::get_readline_event()`] is
+//!    called. You can suspend concurrent output from all the [`SharedWriter`] instances
 //!    that are associated with one [`Readline`] instance. This is useful when you want to
-//!    show a spinner while waiting for a long-running task to complete.
+//!    show a spinner while waiting for a long-running task to complete. Please look at
+//!    the docs for [`Readline`] itself to get a deeper understanding of its mental model.
 //! 3. Use tokio tracing with support for concurrent `stout` writes. If you choose to log
 //!    to `stdout` then the concurrent version ([`SharedWriter`]) from this crate will be
 //!    used. This ensures that the concurrent output is supported even for your tracing
 //!    logs to `stdout`.
+//! 4. You can also plug in your own terminal, like `stdout`, or `stderr`, or any other
+//!    terminal that implements [`SendRawTerminal`] trait for more details.
 //!
 //! This crate can detect when your terminal is not in interactive mode. Eg: when you pipe
 //! the output of your program to another program. In this case, the `readline` feature is
@@ -94,24 +102,25 @@
 //!
 //! # How to use this crate
 //!
-//! ## [`TerminalAsync::try_new()`]
+//! ## [`TerminalAsync::try_new()`], which is the main entry point for most use cases
 //!
-//! This is the main entry point for this library.
-//! 1. You can clone the `TerminalAsync` struct that you get from this method and use it
-//!    in multiple tasks. You can also call [`TerminalAsync::clone_shared_writer()`] to get a
-//!    [`SharedWriter`] instance that you can use to write to `stdout` concurrently, using
-//!    [`std::write!`] or [`std::writeln!`].
-//! 2. To read user input, call [`TerminalAsync::get_readline_event()`].
-//! 3. If you use `std::writeln!` then there's no need to [`TerminalAsync::flush()`]
+//! 1. To read user input, call [`TerminalAsync::get_readline_event()`]. While this is
+//!    running, you can pause and resume the terminal using the [`SharedWriter`] instance
+//!    or by directly calling those methods on this struct or on the underlying
+//!    [`Readline`] instance.
+//! 2. You can call [`TerminalAsync::clone_shared_writer()`] to get a [`SharedWriter`]
+//!    instance that you can use to write to `stdout` concurrently, using [`std::write!`]
+//!    or [`std::writeln!`].
+//! 3. If you use [`std::writeln!`] then there's no need to [`TerminalAsync::flush()`]
 //!    because the `\n` will flush the buffer. When there's no `\n` in the buffer, or you
-//!    are using `std::write!` then you might need to call [`TerminalAsync::flush()`].
+//!    are using [`std::write!`] then you might need to call [`TerminalAsync::flush()`].
 //! 4. You can use the [`TerminalAsync::println`] and [`TerminalAsync::println_prefixed`]
 //!    methods to easily write concurrent output to the `stdout` ([`SharedWriter`]).
-//! 5. You can also get access to the underlying [`Readline`] via the `readline` field.
-//!    Details on this struct are listed below. For most use cases you won't need to do
-//!    this.
+//! 5. You can also get access to the underlying [`Readline`] via the
+//!    [`Readline::readline`] field. Details on this struct are listed below. For most use
+//!    cases you won't need to do this.
 //!
-//! ### [`Readline`] details
+//! ### [`Readline`] overview, please see the docs for this struct for details
 //!
 //! - Structure for reading lines of input from a terminal while lines are output to the
 //!   terminal concurrently.
@@ -217,7 +226,15 @@ pub use spinner_impl::*;
 
 pub type StdMutex<T> = std::sync::Mutex<T>;
 pub type FuturesMutex<T> = futures_util::lock::Mutex<T>;
-pub type SafeRawTerm = std::sync::Arc<FuturesMutex<dyn std::io::Write + Send>>;
+
+pub type SendRawTerminal = dyn std::io::Write + Send;
+pub type SafeRawTerminal = std::sync::Arc<FuturesMutex<SendRawTerminal>>;
+
 pub type SafeLineState = std::sync::Arc<FuturesMutex<LineState>>;
 pub type SafeHistory = std::sync::Arc<FuturesMutex<History>>;
+
 pub type SafeBool = std::sync::Arc<FuturesMutex<bool>>;
+pub type Text = Vec<u8>;
+
+pub const CHANNEL_CAPACITY: usize = 500;
+pub const HISTORY_SIZE_MAX: usize = 1000;
