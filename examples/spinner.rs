@@ -19,64 +19,54 @@ use r3bl_terminal_async::{
     Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync, ARTIFICIAL_UI_DELAY,
     DELAY_MS, DELAY_UNIT,
 };
+use std::io::Write;
 use std::time::Duration;
 use tokio::{time::Instant, try_join};
 
 #[tokio::main]
 pub async fn main() -> miette::Result<()> {
-    let terminal_async = TerminalAsync::try_new("$ ")?;
+    println!("-------------> Example with concurrent output: Braille <-------------");
+    example_with_concurrent_output(SpinnerStyle {
+        template: SpinnerTemplate::Braille,
+        color: SpinnerColor::default_color_wheel(),
+    })
+    .await?;
 
-    if let Some(terminal_async) = terminal_async {
-        println!("-------------> Example with concurrent output: Braille <-------------");
-        example_with_concurrent_output(
-            terminal_async.clone(),
-            SpinnerStyle {
-                template: SpinnerTemplate::Braille,
-                color: SpinnerColor::default_color_wheel(),
-            },
-        )
-        .await?;
+    println!("-------------> Example with concurrent output: Block <-------------");
+    example_with_concurrent_output(SpinnerStyle {
+        template: SpinnerTemplate::Block,
+        color: SpinnerColor::default_color_wheel(),
+    })
+    .await?;
 
-        println!("-------------> Example with concurrent output: Block <-------------");
-        example_with_concurrent_output(
-            terminal_async.clone(),
-            SpinnerStyle {
-                template: SpinnerTemplate::Block,
-                color: SpinnerColor::default_color_wheel(),
-            },
-        )
-        .await?;
-
-        println!("-------------> Example with concurrent output: Dots <-------------");
-        example_with_concurrent_output(
-            terminal_async.clone(),
-            SpinnerStyle {
-                template: SpinnerTemplate::Dots,
-                color: SpinnerColor::default_color_wheel(),
-            },
-        )
-        .await?;
-    }
+    println!("-------------> Example with concurrent output: Dots <-------------");
+    example_with_concurrent_output(SpinnerStyle {
+        template: SpinnerTemplate::Dots,
+        color: SpinnerColor::default_color_wheel(),
+    })
+    .await?;
 
     Ok(())
 }
 
 #[allow(unused_assignments)]
-async fn example_with_concurrent_output(
-    mut terminal_async: TerminalAsync,
-    style: SpinnerStyle,
-) -> miette::Result<()> {
+async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<()> {
+    let terminal_async = TerminalAsync::try_new("$ ").await?;
+    let terminal_async = terminal_async.expect("terminal is not fully interactive");
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!(
         "This is a sample indeterminate progress message: trying to connect to server on {}",
         &address
     );
 
+    let mut shared_writer = terminal_async.clone_shared_writer();
+
+    // Automatically suspend the terminal.
     let mut maybe_spinner = Spinner::try_start(
         message_trying_to_connect.clone(),
         DELAY_UNIT,
-        terminal_async.clone(),
         style,
+        terminal_async.clone_control_signal_sender(),
     )
     .await?;
 
@@ -96,15 +86,15 @@ async fn example_with_concurrent_output(
             if elapsed >= duration {
                 break;
             }
-            terminal_async.println_prefixed("foo").await;
+            let _ = writeln!(shared_writer, "foo");
         }
     }));
 
-    // Stop progress bar.
+    // Stop progress bar. This automatically resumes the terminal.
     if let Some(spinner) = maybe_spinner.as_mut() {
         spinner
             .stop("This is a sample final message for the spinner component: Connected to server")
-            .await;
+            .await?;
     }
 
     Ok(())

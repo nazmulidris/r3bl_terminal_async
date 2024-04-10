@@ -27,25 +27,24 @@ use crossterm::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::{History, ReadlineError, ReadlineEvent};
+use crate::{ReadlineError, ReadlineEvent, SafeHistory};
 
 // 01: add tests
 
-#[derive(Default)]
 pub struct LineState {
     /// Unicode line.
-    line: String,
+    pub line: String,
 
     /// Index of grapheme in line.
-    line_cursor_grapheme: usize,
+    pub line_cursor_grapheme: usize,
 
     /// Column of grapheme in line.
-    current_column: u16,
+    pub current_column: u16,
 
     /// buffer for holding partial grapheme clusters as they come in
-    cluster_buffer: String,
+    pub cluster_buffer: String,
 
-    prompt: String,
+    pub prompt: String,
 
     /// After pressing enter, should we print the line just submitted?
     pub should_print_line_on_enter: bool,
@@ -53,12 +52,10 @@ pub struct LineState {
     /// After pressing control_c should we print the line just cancelled?
     pub should_print_line_on_control_c: bool,
 
-    last_line_length: usize,
-    last_line_completed: bool,
+    pub last_line_length: usize,
+    pub last_line_completed: bool,
 
-    term_size: (u16, u16),
-
-    pub history: History,
+    pub term_size: (u16, u16),
 }
 
 impl LineState {
@@ -71,8 +68,10 @@ impl LineState {
             current_column,
             should_print_line_on_enter: true,
             should_print_line_on_control_c: true,
-
-            ..Default::default()
+            line: String::new(),
+            line_cursor_grapheme: 0,
+            cluster_buffer: String::new(),
+            last_line_length: 0,
         }
     }
 
@@ -82,7 +81,7 @@ impl LineState {
     }
 
     /// Move from a position on the line to the start.
-    fn move_to_beginning(&self, term: &mut impl Write, from: u16) -> io::Result<()> {
+    fn move_to_beginning(&self, term: &mut dyn Write, from: u16) -> io::Result<()> {
         let move_up = self.line_height(from.saturating_sub(1));
         term.queue(cursor::MoveToColumn(0))?;
         if move_up != 0 {
@@ -92,7 +91,7 @@ impl LineState {
     }
 
     /// Move from the start of the line to some position.
-    fn move_from_beginning(&self, term: &mut impl Write, to: u16) -> io::Result<()> {
+    fn move_from_beginning(&self, term: &mut dyn Write, to: u16) -> io::Result<()> {
         let line_height = self.line_height(to.saturating_sub(1));
         let line_remaining_len = to % self.term_size.0; // Get the remaining length
         if line_height != 0 {
@@ -139,23 +138,23 @@ impl LineState {
             .last()
     }
 
-    fn reset_cursor(&self, term: &mut impl Write) -> io::Result<()> {
+    fn reset_cursor(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)
     }
 
-    fn set_cursor(&self, term: &mut impl Write) -> io::Result<()> {
+    fn set_cursor(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_from_beginning(term, self.current_column)
     }
 
     /// Clear current line.
-    pub fn clear(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn clear(&self, term: &mut dyn Write) -> io::Result<()> {
         self.move_to_beginning(term, self.current_column)?;
         term.queue(Clear(FromCursorDown))?;
         Ok(())
     }
 
     /// Render line.
-    pub fn render(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn render(&self, term: &mut dyn Write) -> io::Result<()> {
         write!(term, "{}{}", self.prompt, self.line)?;
         let line_len = self.prompt.len() + UnicodeWidthStr::width(&self.line[..]);
         self.move_to_beginning(term, line_len as u16)?;
@@ -164,13 +163,13 @@ impl LineState {
     }
 
     /// Clear line and render.
-    pub fn clear_and_render(&self, term: &mut impl Write) -> io::Result<()> {
+    pub fn clear_and_render(&self, term: &mut dyn Write) -> io::Result<()> {
         self.clear(term)?;
         self.render(term)?;
         Ok(())
     }
 
-    pub fn print_data(&mut self, data: &[u8], term: &mut impl Write) -> Result<(), ReadlineError> {
+    pub fn print_data(&mut self, data: &[u8], term: &mut dyn Write) -> Result<(), ReadlineError> {
         self.clear(term)?;
 
         // If last written data was not newline, restore the cursor
@@ -208,7 +207,7 @@ impl LineState {
         Ok(())
     }
 
-    pub fn print(&mut self, string: &str, term: &mut impl Write) -> Result<(), ReadlineError> {
+    pub fn print(&mut self, string: &str, term: &mut dyn Write) -> Result<(), ReadlineError> {
         self.print_data(string.as_bytes(), term)?;
         Ok(())
     }
@@ -216,7 +215,7 @@ impl LineState {
     pub fn update_prompt(
         &mut self,
         prompt: &str,
-        term: &mut impl Write,
+        term: &mut dyn Write,
     ) -> Result<(), ReadlineError> {
         self.clear(term)?;
         self.prompt.clear();
@@ -228,10 +227,11 @@ impl LineState {
         Ok(())
     }
 
-    pub fn handle_event(
+    pub async fn handle_event(
         &mut self,
         event: Event,
-        term: &mut impl Write,
+        term: &mut dyn Write,
+        safe_history: SafeHistory,
     ) -> Result<Option<ReadlineEvent>, ReadlineError> {
         match event {
             // Control Keys
@@ -421,7 +421,7 @@ impl LineState {
                 }
                 KeyCode::Up => {
                     // search for next history item, replace line if found.
-                    if let Some(line) = self.history.search_next(&self.line) {
+                    if let Some(line) = safe_history.lock().await.search_next(&self.line) {
                         self.line.clear();
                         self.line += line;
                         self.clear(term)?;
@@ -431,7 +431,7 @@ impl LineState {
                 }
                 KeyCode::Down => {
                     // search for next history item, replace line if found.
-                    if let Some(line) = self.history.search_previous(&self.line) {
+                    if let Some(line) = safe_history.lock().await.search_previous(&self.line) {
                         self.line.clear();
                         self.line += line;
                         self.clear(term)?;

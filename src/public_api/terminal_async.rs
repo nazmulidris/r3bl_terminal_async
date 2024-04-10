@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{Readline, ReadlineEvent, SharedWriter};
+use crate::{FuturesMutex, Readline, ReadlineEvent, SharedWriter};
 use crossterm::style::Stylize;
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
@@ -23,19 +23,23 @@ use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdin_piped, is_stdout_piped, StdinIsPipedResult,
     StdoutIsPipedResult, TTYResult,
 };
-use std::{io::Write, sync::Arc};
-use tokio::sync::Mutex;
+use std::{
+    io::{stdout, Write},
+    sync::Arc,
+};
 
-#[derive(Clone)]
 pub struct TerminalAsync {
-    arc_mutex_readline: Arc<Mutex<Readline>>,
-    stdout: SharedWriter,
+    pub readline: Readline,
+    pub shared_writer: SharedWriter,
 }
 
 // 01: add tests
 
 impl TerminalAsync {
     /// Create a new instance of [TerminalAsync]. Example of `prompt` is `"> "`.
+    ///
+    /// This struct is a wrapper around [Readline] and [SharedWriter]. It does check for
+    /// terminal interactivity before creating the [Readline] instance.
     ///
     /// ### Returns
     /// 1. If the terminal is not fully interactive then it will return [None], and won't
@@ -50,7 +54,7 @@ impl TerminalAsync {
     ///
     /// More info on terminal piping:
     /// - <https://unix.stackexchange.com/questions/597083/how-does-piping-affect-stdin>
-    pub fn try_new(prompt: &str) -> miette::Result<Option<TerminalAsync>> {
+    pub async fn try_new(prompt: &str) -> miette::Result<Option<TerminalAsync>> {
         if let StdinIsPipedResult::StdinIsPiped = is_stdin_piped() {
             return Ok(None);
         }
@@ -61,25 +65,34 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let (readline, stdout) = Readline::new(prompt.to_owned()).into_diagnostic()?;
+        let raw_term = Arc::new(FuturesMutex::new(stdout()));
+        let (readline, stdout) = Readline::new(prompt.to_owned(), raw_term)
+            .await
+            .into_diagnostic()?;
         Ok(Some(TerminalAsync {
-            arc_mutex_readline: Arc::new(Mutex::new(readline)),
-            stdout,
+            readline,
+            shared_writer: stdout,
         }))
     }
 
-    pub fn clone_readline(&self) -> Arc<Mutex<Readline>> {
-        self.arc_mutex_readline.clone()
+    /// This sender is used to send signals to the [Readline] instance to suspend, resume,
+    /// flush, etc. This is useful when you want to control the terminal from another
+    /// thread. Here are the possible signals: [crate::ReadlineControlSignal].
+    pub fn clone_control_signal_sender(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<crate::ReadlineControlSignal> {
+        self.readline.control_signal_sender.clone()
     }
 
-    pub fn clone_stdout(&self) -> SharedWriter {
-        self.stdout.clone()
+    /// This is useful when you want to write to the terminal concurrently. This is a
+    /// [crate::SharedWriter] that can be cloned and used in other threads.
+    pub fn clone_shared_writer(&self) -> SharedWriter {
+        self.shared_writer.clone()
     }
 
     /// Replacement for [std::io::Stdin::read_line()] (this is async and non blocking).
     pub async fn get_readline_event(&mut self) -> miette::Result<ReadlineEvent> {
-        let mut readline = self.arc_mutex_readline.lock().await;
-        readline.readline().fuse().await.into_diagnostic()
+        self.readline.readline().fuse().await.into_diagnostic()
     }
 
     /// Don't change the `content`. Print it as is. This works concurrently and is async
@@ -89,7 +102,7 @@ impl TerminalAsync {
     where
         T: std::fmt::Display,
     {
-        let _ = writeln!(self.stdout, "{}", content);
+        let _ = writeln!(self.shared_writer, "{}", content);
     }
 
     /// Prefix the `content` with a color and special characters, then print it.
@@ -98,7 +111,7 @@ impl TerminalAsync {
         T: std::fmt::Display,
     {
         let _ = writeln!(
-            self.stdout,
+            self.shared_writer,
             "{} {}",
             " > ".red().bold().on_dark_grey(),
             content
@@ -108,26 +121,35 @@ impl TerminalAsync {
     /// Simply flush the buffer. If there's a newline in the buffer, it will be printed.
     /// Otherwise it won't.
     pub async fn flush(&mut self) {
-        let _ = self.arc_mutex_readline.lock().await.flush().await;
+        let _ = self.readline.flush().await;
     }
 
+    /// Suspend the terminal. This is useful when you want to pause the terminal, eg:
+    /// when you want to display a [crate::Spinner].
     pub async fn suspend(&mut self) {
-        let mut readline = self.arc_mutex_readline.lock().await;
-        readline.suspend().await;
+        let _ = self
+            .readline
+            .control_signal_sender
+            .send(crate::ReadlineControlSignal::Suspend)
+            .await
+            .into_diagnostic();
     }
 
+    /// Resume the terminal. This is useful when you want to resume the terminal, eg:
+    /// when you want to stop displaying a [crate::Spinner].
     pub async fn resume(&mut self) {
-        let this = self.clone();
-        this.arc_mutex_readline.lock().await.resume().await;
-
-        let mut this = self.clone();
-        this.flush().await;
+        let _ = self
+            .readline
+            .control_signal_sender
+            .send(crate::ReadlineControlSignal::Resume)
+            .await
+            .into_diagnostic();
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that
     /// are managing [SharedWriter] tasks. This is useful when you want to exit the CLI
     /// event loop, typically when the user requests it.
     pub async fn close(&mut self) {
-        self.arc_mutex_readline.lock().await.close();
+        self.readline.close().await;
     }
 }

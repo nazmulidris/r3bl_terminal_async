@@ -15,9 +15,9 @@
  *   limitations under the License.
  */
 
-use crate::{SpinnerRender, SpinnerStyle, TerminalAsync};
+use crate::{SpinnerRender, SpinnerStyle};
 use crossterm::terminal;
-use miette::miette;
+use miette::{miette, IntoDiagnostic};
 use r3bl_tuify::{
     is_fully_uninteractive_terminal, is_stdout_piped, StdoutIsPipedResult, TTYResult,
 };
@@ -33,9 +33,9 @@ pub struct Spinner {
     /// set to [None].
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
 
-    pub terminal_async: TerminalAsync,
-
     pub style: SpinnerStyle,
+
+    pub readline_control_signal_sender: tokio::sync::mpsc::Sender<crate::ReadlineControlSignal>,
 }
 
 // 01: add tests
@@ -61,7 +61,10 @@ mod abort_handle {
 }
 
 impl Spinner {
-    /// Create a new instance of [Spinner].
+    /// Create a new instance of [Spinner]. The spinner will automatically suspend
+    /// [crate::ReadlineControlSignal::Suspend] the terminal when it starts, and resume
+    /// [crate::ReadlineControlSignal::Resume] the terminal when it stops (using
+    /// [Self::readline_control_signal_sender]).
     ///
     /// ### Returns
     /// 1. This will return an error if the task is already running.
@@ -77,8 +80,8 @@ impl Spinner {
     pub async fn try_start(
         spinner_message: String,
         tick_delay: Duration,
-        terminal_async: TerminalAsync,
         style: SpinnerStyle,
+        readline_control_signal_sender: tokio::sync::mpsc::Sender<crate::ReadlineControlSignal>,
     ) -> miette::Result<Option<Spinner>> {
         if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
             return Ok(None);
@@ -91,9 +94,9 @@ impl Spinner {
         let mut spinner = Spinner {
             message: spinner_message,
             tick_delay,
-            terminal_async,
             abort_handle: Arc::new(Mutex::new(None)),
             style,
+            readline_control_signal_sender,
         };
 
         // Start task and get the abort_handle.
@@ -101,9 +104,6 @@ impl Spinner {
 
         // Save the abort_handle.
         abort_handle::set(&spinner.abort_handle, abort_handle).await;
-
-        // Suspend terminal_async output while spinner is running.
-        spinner.terminal_async.suspend().await;
 
         Ok(Some(spinner))
     }
@@ -122,6 +122,11 @@ impl Spinner {
         let abort_handle = self.abort_handle.clone();
         let mut stdout = self.get_stdout();
         let mut style = self.style.clone();
+
+        self.readline_control_signal_sender
+            .send(crate::ReadlineControlSignal::Suspend)
+            .await
+            .into_diagnostic()?;
 
         let join_handle = tokio::spawn(async move {
             let mut interval = interval(tick_delay);
@@ -151,9 +156,15 @@ impl Spinner {
         Ok(join_handle.abort_handle())
     }
 
-    pub async fn stop(&mut self, final_message: &str) {
+    pub async fn stop(&mut self, final_message: &str) -> miette::Result<()> {
         // If task is running, abort it. And print "\n".
         if let Some(abort_handle) = abort_handle::try_unset(&self.abort_handle).await {
+            // Resume the terminal.
+            self.readline_control_signal_sender
+                .send(crate::ReadlineControlSignal::Resume)
+                .await
+                .into_diagnostic()?;
+
             // Abort the task.
             abort_handle.abort();
 
@@ -163,10 +174,9 @@ impl Spinner {
                 .render_final_tick(final_message, get_terminal_display_width());
             self.style
                 .paint_final_tick(&final_output, &mut self.get_stdout());
-
-            // Resume terminal_async output.
-            self.terminal_async.resume().await;
         }
+
+        Ok(())
     }
 }
 
