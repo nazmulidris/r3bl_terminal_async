@@ -16,11 +16,11 @@
  */
 
 use r3bl_terminal_async::{
-    Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync, ARTIFICIAL_UI_DELAY,
-    DELAY_MS, DELAY_UNIT,
+    FuturesMutex, Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync,
+    ARTIFICIAL_UI_DELAY, DELAY_MS, DELAY_UNIT,
 };
-use std::io::Write;
-use std::time::Duration;
+use std::{io::stderr, time::Duration};
+use std::{io::Write, sync::Arc};
 use tokio::{time::Instant, try_join};
 
 #[tokio::main]
@@ -64,8 +64,13 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
     // Pause terminal.
     terminal_async.pause().await;
 
-    let mut maybe_spinner =
-        Spinner::try_start(message_trying_to_connect.clone(), DELAY_UNIT, style).await?;
+    let mut maybe_spinner = Spinner::try_start(
+        message_trying_to_connect.clone(),
+        DELAY_UNIT,
+        style,
+        Arc::new(FuturesMutex::new(stderr())),
+    )
+    .await?;
 
     // Start another task, to simulate some async work, that uses a interval to display
     // output, for a fixed amount of time, using `terminal_async.println_prefixed()`.
@@ -91,7 +96,7 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
     if let Some(spinner) = maybe_spinner.as_mut() {
         spinner
             .stop("This is a sample final message for the spinner component: Connected to server")
-            .await;
+            .await?;
     }
 
     // Resume terminal.

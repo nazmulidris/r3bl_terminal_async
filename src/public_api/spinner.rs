@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{SpinnerRender, SpinnerStyle};
+use crate::{SafeRawTerminal, SpinnerRender, SpinnerStyle};
 use crossterm::terminal;
 use miette::miette;
 use r3bl_tuify::{
@@ -34,6 +34,8 @@ pub struct Spinner {
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
 
     pub style: SpinnerStyle,
+
+    pub safe_output_terminal: SafeRawTerminal,
 }
 
 // 01: add tests
@@ -76,6 +78,7 @@ impl Spinner {
         spinner_message: String,
         tick_delay: Duration,
         style: SpinnerStyle,
+        safe_output_terminal: SafeRawTerminal,
     ) -> miette::Result<Option<Spinner>> {
         if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
             return Ok(None);
@@ -90,6 +93,7 @@ impl Spinner {
             tick_delay,
             abort_handle: Arc::new(Mutex::new(None)),
             style,
+            safe_output_terminal,
         };
 
         // Start task and get the abort_handle.
@@ -101,10 +105,6 @@ impl Spinner {
         Ok(Some(spinner))
     }
 
-    fn get_terminal_writer(&self) -> impl std::io::Write {
-        std::io::stdout()
-    }
-
     async fn try_start_task(&mut self) -> miette::Result<AbortHandle> {
         if abort_handle::is_set(&self.abort_handle).await {
             return Err(miette!("Task is already running"));
@@ -113,8 +113,8 @@ impl Spinner {
         let message = self.message.clone();
         let tick_delay = self.tick_delay;
         let abort_handle = self.abort_handle.clone();
-        let mut stdout = self.get_terminal_writer();
         let mut style = self.style.clone();
+        let safe_output_terminal = self.safe_output_terminal.clone();
 
         let join_handle = tokio::spawn(async move {
             let mut interval = interval(tick_delay);
@@ -134,7 +134,9 @@ impl Spinner {
 
                 // Render and paint the output, based on style.
                 let output = style.render_tick(&message_clone, count, get_terminal_display_width());
-                style.paint_tick(&output, &mut stdout);
+                let _ = style
+                    .print_tick(&output, &mut *safe_output_terminal.lock().await)
+                    .await;
 
                 // Increment count to affect the output in the next iteration of this loop.
                 count += 1;
@@ -144,7 +146,7 @@ impl Spinner {
         Ok(join_handle.abort_handle())
     }
 
-    pub async fn stop(&mut self, final_message: &str) {
+    pub async fn stop(&mut self, final_message: &str) -> miette::Result<()> {
         // If task is running, abort it. And print "\n".
         if let Some(abort_handle) = abort_handle::try_unset(&self.abort_handle).await {
             // Abort the task.
@@ -155,8 +157,14 @@ impl Spinner {
                 .style
                 .render_final_tick(final_message, get_terminal_display_width());
             self.style
-                .paint_final_tick(&final_output, &mut self.get_terminal_writer());
+                .print_final_tick(
+                    &final_output,
+                    &mut *self.safe_output_terminal.clone().lock().await,
+                )
+                .await?;
         }
+
+        Ok(())
     }
 }
 

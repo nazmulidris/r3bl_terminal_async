@@ -15,25 +15,34 @@
  *   limitations under the License.
  */
 
-use crate::{spinner_render::style::style, SpinnerColor, SpinnerTemplate};
+use crate::{spinner_render::style::style, SendRawTerminal, SpinnerColor, SpinnerTemplate};
 use crate::{SpinnerStyle, BLOCK_DOTS, BRAILLE_DOTS};
 use crossterm::{
-    cursor::{MoveDown, MoveToColumn, MoveUp},
-    queue,
+    cursor::{MoveToColumn, MoveUp},
     style::{self, Print, Stylize},
     terminal::{Clear, ClearType},
+    QueueableCommand,
 };
+use miette::IntoDiagnostic;
 use r3bl_rs_utils_core::ch;
 use r3bl_rs_utils_core::ChUnit;
 use r3bl_tui::convert_from_tui_color_to_crossterm_color;
 use r3bl_tuify::clip_string_to_width_with_ellipsis;
-use std::io::Write;
 
 pub trait SpinnerRender {
     fn render_tick(&mut self, message: &str, count: usize, display_width: usize) -> String;
-    fn paint_tick(&self, output: &str, writer: &mut impl Write);
+    fn print_tick(
+        &self,
+        output: &str,
+        writer: &mut SendRawTerminal,
+    ) -> impl std::future::Future<Output = miette::Result<()>> + Send; /* this is in lieu of async marker on the fn */
+
     fn render_final_tick(&self, message: &str, display_width: usize) -> String;
-    fn paint_final_tick(&self, output: &str, writer: &mut impl Write);
+    fn print_final_tick(
+        &self,
+        output: &str,
+        writer: &mut SendRawTerminal,
+    ) -> impl std::future::Future<Output = miette::Result<()>> + Send; /* this is in lieu of async marker on the fn */
 }
 
 fn apply_color(output: &str, color: &mut SpinnerColor) -> String {
@@ -86,42 +95,52 @@ impl SpinnerRender for SpinnerStyle {
         }
     }
 
-    fn paint_tick(&self, output: &str, writer: &mut impl Write) {
+    async fn print_tick(&self, output: &str, writer: &mut SendRawTerminal) -> miette::Result<()> {
         match self.template {
             SpinnerTemplate::Dots => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = queue!(
-                    writer,
-                    MoveToColumn(0),
-                    Print(format!("{}\n", output)),
-                    MoveUp(1),
-                );
+                writer
+                    .queue(MoveToColumn(0))
+                    .into_diagnostic()?
+                    .queue(Print(format!("{}\n", output)))
+                    .into_diagnostic()?
+                    .queue(MoveUp(1))
+                    .into_diagnostic()?;
             }
+
             SpinnerTemplate::Braille => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = queue!(
-                    writer,
-                    MoveToColumn(0),
-                    Clear(ClearType::CurrentLine),
-                    Print(format!("{}\n", output)),
-                    MoveUp(1),
-                );
+                writer
+                    .queue(MoveToColumn(0))
+                    .into_diagnostic()?
+                    .queue(Clear(ClearType::CurrentLine))
+                    .into_diagnostic()?
+                    .queue(Print(format!("{}\n", output)))
+                    .into_diagnostic()?
+                    .queue(MoveUp(1))
+                    .into_diagnostic()?;
             }
+
             SpinnerTemplate::Block => {
                 // Print the output. And make sure to terminate w/ a newline, so that the
                 // output is printed.
-                let _ = queue!(
-                    writer,
-                    MoveToColumn(0),
-                    Clear(ClearType::CurrentLine),
-                    Print(format!("{}\n", output)),
-                    MoveUp(1),
-                );
+                writer
+                    .queue(MoveToColumn(0))
+                    .into_diagnostic()?
+                    .queue(Clear(ClearType::CurrentLine))
+                    .into_diagnostic()?
+                    .queue(Print(format!("{}\n", output)))
+                    .into_diagnostic()?
+                    .queue(MoveUp(1))
+                    .into_diagnostic()?;
             }
         }
-        let _ = writer.flush();
+
+        writer.flush().into_diagnostic()?;
+
+        Ok(())
     }
 
     fn render_final_tick(&self, final_message: &str, display_width: usize) -> String {
@@ -134,19 +153,23 @@ impl SpinnerRender for SpinnerStyle {
         }
     }
 
-    fn paint_final_tick(&self, output: &str, writer: &mut impl Write) {
+    async fn print_final_tick(
+        &self,
+        output: &str,
+        writer: &mut SendRawTerminal,
+    ) -> miette::Result<()> {
         match self.template {
-            SpinnerTemplate::Dots | SpinnerTemplate::Braille | SpinnerTemplate::Block => {
-                let _ = queue!(
-                    writer,
-                    MoveToColumn(0),
-                    Clear(ClearType::CurrentLine),
-                    Print(output.to_string()),
-                    MoveDown(1),
-                    MoveToColumn(0),
-                );
-            }
-        }
-        let _ = writer.flush();
+            SpinnerTemplate::Dots | SpinnerTemplate::Braille | SpinnerTemplate::Block => writer
+                .queue(MoveToColumn(0))
+                .into_diagnostic()?
+                .queue(Print(Clear(ClearType::CurrentLine)))
+                .into_diagnostic()?
+                .queue(Print(format!("{}\n", output)))
+                .into_diagnostic()?,
+        };
+
+        writer.flush().into_diagnostic()?;
+
+        Ok(())
     }
 }
