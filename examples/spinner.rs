@@ -61,16 +61,8 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
 
     let mut shared_writer = terminal_async.clone_shared_writer();
 
-    // 00: cleanup
-    let flush_signal_sender = terminal_async.clone_flush_signal_sender();
-
-    // Suspend terminal.
-    // 00: cleanup
-    // flush_signal_sender
-    //     .send(ReadlineFlushSignal::Suspend)
-    //     .await
-    //     .into_diagnostic()?;
-    terminal_async.suspend().await;
+    // Pause terminal.
+    terminal_async.pause().await;
 
     let mut maybe_spinner =
         Spinner::try_start(message_trying_to_connect.clone(), DELAY_UNIT, style).await?;
@@ -103,11 +95,6 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
     }
 
     // Resume terminal.
-    // 00: cleanup
-    // flush_signal_sender
-    //     .send(ReadlineFlushSignal::Resume)
-    //     .await
-    //     .into_diagnostic()?;
     terminal_async.resume().await;
 
     Ok(())

@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::Text;
+use crate::{LineControlSignal, Text};
 use std::io::{self, Write};
 
 // 01: add tests
@@ -31,11 +31,11 @@ use std::io::{self, Write};
 /// executing on the associated `Readline` instance.
 pub struct SharedWriter {
     /// Holds the data to be written to the terminal.
-    pub(crate) buffer: Text,
+    pub buffer: Text,
 
     /// Sender end of the channel, the receiver end is in [`crate::Readline`], which does
     /// the actual printing to `stdout`.
-    pub(crate) line_sender: tokio::sync::mpsc::Sender<Text>,
+    pub line_sender: tokio::sync::mpsc::Sender<LineControlSignal>,
 }
 
 impl Clone for SharedWriter {
@@ -56,7 +56,10 @@ impl Write for SharedWriter {
 
         // If self_buffer ends with a newline, send it to the line_sender.
         if self_buffer.ends_with(b"\n") {
-            match self.line_sender.try_send(self_buffer.clone()) {
+            match self
+                .line_sender
+                .try_send(LineControlSignal::Line(self_buffer.clone()))
+            {
                 Ok(_) => {
                     self_buffer.clear();
                 }

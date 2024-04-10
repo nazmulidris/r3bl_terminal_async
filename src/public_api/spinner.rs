@@ -101,8 +101,8 @@ impl Spinner {
         Ok(Some(spinner))
     }
 
-    fn get_stdout(&self) -> impl std::io::Write {
-        std::io::stderr()
+    fn get_terminal_writer(&self) -> impl std::io::Write {
+        std::io::stdout()
     }
 
     async fn try_start_task(&mut self) -> miette::Result<AbortHandle> {
@@ -113,7 +113,7 @@ impl Spinner {
         let message = self.message.clone();
         let tick_delay = self.tick_delay;
         let abort_handle = self.abort_handle.clone();
-        let mut stdout = self.get_stdout();
+        let mut stdout = self.get_terminal_writer();
         let mut style = self.style.clone();
 
         let join_handle = tokio::spawn(async move {
@@ -155,7 +155,7 @@ impl Spinner {
                 .style
                 .render_final_tick(final_message, get_terminal_display_width());
             self.style
-                .paint_final_tick(&final_output, &mut self.get_stdout());
+                .paint_final_tick(&final_output, &mut self.get_terminal_writer());
         }
     }
 }

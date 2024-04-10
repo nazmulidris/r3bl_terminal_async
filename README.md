@@ -1,25 +1,27 @@
 # r3bl_terminal_async
 
-> The intention is to move this crate into r3bl-open-core/tuify. It is not in
-> `rust-scratch`
-> [repo](https://github.com/nazmulidris/rust-scratch/tree/main/tcp-api-server) for this
-> reason. It is used as a dependency by crates that are in `rust-scratch`
-> [repo](https://github.com/nazmulidris/rust-scratch/tree/main/tcp-api-server).
-
 The `r3bl_terminal_async` library lets your CLI program:
 1. Read user input from the terminal line by line, while your program concurrently
-   writes lines to the same terminal. One [`Readline`] instance can spawn many async
-   `stdout` writers ([SharedWriter]) that can write to the terminal concurrently. You
-   use the [`TerminalAsync`] struct to use this functionality. You rarely have to access
-   the underlying [`Readline`] or [`SharedWriter`] directly.
-2. Generate a spinner (indeterminate). This spinner works concurrently with the rest
-   of your program. It suspends the output from all the [`SharedWriter`] instances
+   writes lines to the same terminal. One [`Readline`] instance can be used to spawn
+   many async `stdout` writers ([SharedWriter]) that can write to the terminal
+   concurrently. For most users the [`TerminalAsync`] struct is the simplest way to
+   use this crate. You rarely have to access the underlying [`Readline`] or
+   [`SharedWriter`] directly. But you can if you need to. [`SharedWriter`] can be
+   cloned and is thread-safe. However, there is only one instance of [`Readline`] per
+   [`TerminalAsync`] instance.
+2. Generate a spinner (indeterminate progress). This spinner works concurrently with
+   the rest of your program. You have to call this while the [`Readline::readline()`]
+   is active, which also happens when [`TerminalAsync::get_readline_event()`] is
+   called. You can suspend concurrent output from all the [`SharedWriter`] instances
    that are associated with one [`Readline`] instance. This is useful when you want to
-   show a spinner while waiting for a long-running task to complete.
+   show a spinner while waiting for a long-running task to complete. Please look at
+   the docs for [`Readline`] itself to get a deeper understanding of its mental model.
 3. Use tokio tracing with support for concurrent `stout` writes. If you choose to log
    to `stdout` then the concurrent version ([`SharedWriter`]) from this crate will be
    used. This ensures that the concurrent output is supported even for your tracing
    logs to `stdout`.
+4. You can also plug in your own terminal, like `stdout`, or `stderr`, or any other
+   terminal that implements [`SendRawTerminal`] trait for more details.
 
 This crate can detect when your terminal is not in interactive mode. Eg: when you pipe
 the output of your program to another program. In this case, the `readline` feature is
@@ -41,7 +43,7 @@ Here is a video of the `terminal_async` example in action:
 Here is a video of the `spinner` example in action:
 ![spinner_video](https://github.com/nazmulidris/r3bl_terminal_async/blob/main/docs/clip-spinner.gif?raw=true)
 
-## Why use this crate
+### Why use this crate
 
 1. Because
    [`read_line()`](https://doc.rust-lang.org/std/io/struct.Stdin.html#method.read_line)
@@ -66,7 +68,7 @@ Here is a video of the `spinner` example in action:
       caret is at row 0 of a new line.
     - This results in output that doesn't look good.
 
-### More info on blocking and thread cancellation in Rust
+#### More info on blocking and thread cancellation in Rust
 
 - [Docs: tokio's `stdin`](https://docs.rs/tokio/latest/tokio/io/struct.Stdin.html)
 - [Discussion: Stopping a thread in
@@ -76,33 +78,34 @@ Here is a video of the `spinner` example in action:
 - [Discussion: stdin, stdout redirection for spawned
   processes](https://stackoverflow.com/questions/34611742/how-do-i-read-the-output-of-a-child-process-without-blocking-in-rust)
 
-# Examples
+## Examples
 
 ```bash
 cargo run --example terminal_async
 cargo run --example spinner
 ```
 
-# How to use this crate
+## How to use this crate
 
-## [`TerminalAsync::try_new()`]
+### [`TerminalAsync::try_new()`], which is the main entry point for most use cases
 
-This is the main entry point for this library.
-1. You can clone the `TerminalAsync` struct that you get from this method and use it
-   in multiple tasks. You can also call [`TerminalAsync::clone_stdout()`] to get a
-   [`SharedWriter`] instance that you can use to write to `stdout` concurrently, using
-   [`std::write!`] or [`std::writeln!`].
-2. To read user input, call [`TerminalAsync::get_readline_event()`].
-3. If you use `std::writeln!` then there's no need to [`TerminalAsync::flush()`]
+1. To read user input, call [`TerminalAsync::get_readline_event()`]. While this is
+   running, you can pause and resume the terminal using the [`SharedWriter`] instance
+   or by directly calling those methods on this struct or on the underlying
+   [`Readline`] instance.
+2. You can call [`TerminalAsync::clone_shared_writer()`] to get a [`SharedWriter`]
+   instance that you can use to write to `stdout` concurrently, using [`std::write!`]
+   or [`std::writeln!`].
+3. If you use [`std::writeln!`] then there's no need to [`TerminalAsync::flush()`]
    because the `\n` will flush the buffer. When there's no `\n` in the buffer, or you
-   are using `std::write!` then you might need to call [`TerminalAsync::flush()`].
+   are using [`std::write!`] then you might need to call [`TerminalAsync::flush()`].
 4. You can use the [`TerminalAsync::println`] and [`TerminalAsync::println_prefixed`]
    methods to easily write concurrent output to the `stdout` ([`SharedWriter`]).
-5. You can also get access to the underlying [`Readline`] via the `readline` field.
-   Details on this struct are listed below. For most use cases you won't need to do
-   this.
+5. You can also get access to the underlying [`Readline`] via the
+   [`Readline::readline`] field. Details on this struct are listed below. For most use
+   cases you won't need to do this.
 
-### [`Readline`] details
+#### [`Readline`] overview, please see the docs for this struct for details
 
 - Structure for reading lines of input from a terminal while lines are output to the
   terminal concurrently.
@@ -129,7 +132,7 @@ This is the main entry point for this library.
 - When done, call [`Readline::flush()`] to ensure that all lines written to
   the `SharedWriter` are output.
 
-## [`Spinner::try_start()`]
+### [`Spinner::try_start()`]
 
 This displays an indeterminate spinner while waiting for a long-running task to
 complete. The intention with displaying this spinner is to give the user an
@@ -138,13 +141,13 @@ output concurrently, this spinner will not be clobbered. It suspends the output
 from all the [`SharedWriter`] instances that are associated with one [`Readline`]
 instance. The `spinner.rs` example shows this (`cargo run --example spinner`).
 
-## [`tracing_setup::init()`]
+### [`tracing_setup::init()`]
 
 This is a convenience method to setup Tokio [`tracing_subscriber`] with `stdout` as the output
 destination. This method also ensures that the [`SharedWriter`] is used for concurrent
 writes to `stdout`.
 
-# Input Editing Behavior
+## Input Editing Behavior
 
 While entering text, the user can edit and navigate through the current
 input line with the following key bindings:
@@ -169,7 +172,7 @@ input line with the following key bindings:
 - Ctrl-C: Send an `Interrupt` event.
 - Extensible design based on `crossterm`'s `event-stream` feature.
 
-# Why another async readline crate?
+## Why another async readline crate?
 
 This crate & repo is forked from
 [rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
@@ -185,7 +188,7 @@ been rewritten and re-architected. Here are some changes made to the code:
 - Add `spinner_impl`, `readline_impl`, and `public_api` modules.
 - Add tests.
 
-# Video series on [developerlife.com](https://developerlife.com) [YT channel](https://www.youtube.com/@developerlifecom) on building this crate with Naz
+## Video series on [developerlife.com](https://developerlife.com) [YT channel](https://www.youtube.com/@developerlifecom) on building this crate with Naz
 
 - [Part 1: Why?](https://youtu.be/6LhVx0xM86c)
 - [Part 2: What?](https://youtu.be/3vQJguti02I)
@@ -197,3 +200,5 @@ been rewritten and re-architected. Here are some changes made to the code:
 - Playlists
   - [Build with Naz, async readline and spinner for CLI in Rust](https://www.youtube.com/watch?v=3vQJguti02I&list=PLofhE49PEwmwelPkhfiqdFQ9IXnmGdnSE)
   - [Build with Naz, testing in Rust](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
+
+License: Apache-2.0
