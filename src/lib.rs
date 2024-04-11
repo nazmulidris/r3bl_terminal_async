@@ -156,6 +156,20 @@
 //! from all the [`SharedWriter`] instances that are associated with one [`Readline`]
 //! instance. The `spinner.rs` example shows this (`cargo run --example spinner`).
 //!
+//! There are two use cases to consider when displaying a spinner.
+//!
+//! 1. You haven't called [`Readline::readline()`] or
+//!    [`TerminalAsync::get_readline_event()`] yet. In this case, you can call
+//!    [`Spinner::try_start()`] and it will display the spinner. You don't really have
+//!    to pause the terminal output because there isn't any yet. However, just to be
+//!    sure in case you want to, you can call [`TerminalAsync::pause()`] when you start
+//!    the spinner, and [`TerminalAsync::resume()`] when you stop the spinner.
+//! 2. You have already called [`Readline::readline()`] or
+//!    [`TerminalAsync::get_readline_event()`]. In this case, you will have access to a
+//!    [`SharedWriter`] instance. You can call [`tokio::sync::mpsc::Sender`]
+//!    [`SharedWriter::line_sender`] to pause and resume the terminal output, using the
+//!    [`LineControlSignal::Pause`] and [`LineControlSignal::Resume`] ]enum.
+//!
 //! ## [`tracing_setup::init()`]
 //!
 //! This is a convenience method to setup Tokio [`tracing_subscriber`] with `stdout` as the output
@@ -211,7 +225,9 @@
 //! - [Part 4: Build the spinner](https://www.youtube.com/watch?v=fcb6rstRniI)
 //! - [Part 5: Add color gradient animation to
 //!   spinner](https://www.youtube.com/watch?v=_QjsGDds270)
-//! - [Testing](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
+//! - [Testing playlist](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
+//!     - [Part 1: Intro](https://www.youtube.com/watch?v=Xt495QLrFFk)
+//!     - [Part 2: Deep dive](https://www.youtube.com/watch?v=4iM9t5dgvU4)
 //! - Playlists
 //!   - [Build with Naz, async readline and spinner for CLI in Rust](https://www.youtube.com/watch?v=3vQJguti02I&list=PLofhE49PEwmwelPkhfiqdFQ9IXnmGdnSE)
 //!   - [Build with Naz, testing in Rust](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
