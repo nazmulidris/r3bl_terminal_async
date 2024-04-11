@@ -1,6 +1,9 @@
 # r3bl_terminal_async
 
-The `r3bl_terminal_async` library lets your CLI program:
+The `r3bl_terminal_async` library lets your CLI program be asynchronous and
+interactive without blocking the main thread. It allows you to create beautiful REPLs
+(read execute print loops) with ease. The following is a list of features:
+
 1. Read user input from the terminal line by line, while your program concurrently
    writes lines to the same terminal. One [`Readline`] instance can be used to spawn
    many async `stdout` writers ([SharedWriter]) that can write to the terminal
@@ -9,25 +12,29 @@ The `r3bl_terminal_async` library lets your CLI program:
    [`SharedWriter`] directly. But you can if you need to. [`SharedWriter`] can be
    cloned and is thread-safe. However, there is only one instance of [`Readline`] per
    [`TerminalAsync`] instance.
-2. Generate a spinner (indeterminate progress). This spinner works concurrently with
-   the rest of your program. You have to call this while the [`Readline::readline()`]
-   is active, which also happens when [`TerminalAsync::get_readline_event()`] is
-   called. You can suspend concurrent output from all the [`SharedWriter`] instances
-   that are associated with one [`Readline`] instance. This is useful when you want to
-   show a spinner while waiting for a long-running task to complete. Please look at
-   the docs for [`Readline`] itself to get a deeper understanding of its mental model.
+
+2. Generate a spinner (indeterminate progress indicator). This spinner works
+   concurrently with the rest of your program. When the [`Spinner`] is active it
+   automatically pauses output from all the [`SharedWriter`] instances that are
+   associated with one [`Readline`] instance. Typically a spawned task clones its own
+   [`SharedWriter`] to generate its output. This is useful when you want to show a
+   spinner while waiting for a long-running task to complete. Please look at the
+   example to see this in action, by running `cargo run --example terminal_async`.
+   Then type `starttask1`, press Enter. Then type `spinner`, press Enter.
+
 3. Use tokio tracing with support for concurrent `stout` writes. If you choose to log
    to `stdout` then the concurrent version ([`SharedWriter`]) from this crate will be
    used. This ensures that the concurrent output is supported even for your tracing
    logs to `stdout`.
+
 4. You can also plug in your own terminal, like `stdout`, or `stderr`, or any other
    terminal that implements [`SendRawTerminal`] trait for more details.
 
 This crate can detect when your terminal is not in interactive mode. Eg: when you pipe
 the output of your program to another program. In this case, the `readline` feature is
-disabled. Both the [`TerminalAsync`] and [`Spinner`] support this functionality. So if you
-run the examples in this crate, and pipe something into them, they won't do anything. Here's
-an example:
+disabled. Both the [`TerminalAsync`] and [`Spinner`] support this functionality. So if
+you run the examples in this crate, and pipe something into them, they won't do
+anything. Here's an example:
 
 ```bash
 # This will work.
@@ -89,10 +96,7 @@ cargo run --example spinner
 
 ### [`TerminalAsync::try_new()`], which is the main entry point for most use cases
 
-1. To read user input, call [`TerminalAsync::get_readline_event()`]. While this is
-   running, you can pause and resume the terminal using the [`SharedWriter`] instance
-   or by directly calling those methods on this struct or on the underlying
-   [`Readline`] instance.
+1. To read user input, call [`TerminalAsync::get_readline_event()`].
 2. You can call [`TerminalAsync::clone_shared_writer()`] to get a [`SharedWriter`]
    instance that you can use to write to `stdout` concurrently, using [`std::write!`]
    or [`std::writeln!`].
@@ -129,31 +133,19 @@ cargo run --example spinner
 - Lines written to the associated `SharedWriter` while `readline()` is in
   progress will be output to the screen above the input line.
 
-- When done, call [`Readline::flush()`] to ensure that all lines written to
-  the `SharedWriter` are output.
+- When done, call [`crate::pause_and_resume_support::flush_internal()`] to ensure that
+  all lines written to the `SharedWriter` are output.
 
 ### [`Spinner::try_start()`]
 
 This displays an indeterminate spinner while waiting for a long-running task to
-complete. The intention with displaying this spinner is to give the user an
-indication that the program is still running and hasn't hung. When other tasks produce
-output concurrently, this spinner will not be clobbered. It suspends the output
-from all the [`SharedWriter`] instances that are associated with one [`Readline`]
-instance. The `spinner.rs` example shows this (`cargo run --example spinner`).
-
-There are two use cases to consider when displaying a spinner.
-
-1. You haven't called [`Readline::readline()`] or
-   [`TerminalAsync::get_readline_event()`] yet. In this case, you can call
-   [`Spinner::try_start()`] and it will display the spinner. You don't really have
-   to pause the terminal output because there isn't any yet. However, just to be
-   sure in case you want to, you can call [`TerminalAsync::pause()`] when you start
-   the spinner, and [`TerminalAsync::resume()`] when you stop the spinner.
-2. You have already called [`Readline::readline()`] or
-   [`TerminalAsync::get_readline_event()`]. In this case, you will have access to a
-   [`SharedWriter`] instance. You can call [`tokio::sync::mpsc::Sender`]
-   [`SharedWriter::line_sender`] to pause and resume the terminal output, using the
-   [`LineControlSignal::Pause`] and [`LineControlSignal::Resume`] ]enum.
+complete. The intention with displaying this spinner is to give the user an indication
+that the program is still running and hasn't hung up or become unresponsive. When
+other tasks produce output concurrently, this spinner's output will not be clobbered.
+Neither will the spinner output clobber the output from other tasks. It suspends the
+output from all the [`SharedWriter`] instances that are associated with one
+[`Readline`] instance. Both the `terminal_async.rs` and `spinner.rs` examples shows
+this (`cargo run --example terminal_async` and `cargo run --example spinner`).
 
 ### [`tracing_setup::init()`]
 
@@ -191,14 +183,16 @@ input line with the following key bindings:
 This crate & repo is forked from
 [rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
 been rewritten and re-architected. Here are some changes made to the code:
+- Rearchitect the entire crate from the ground up to operate in a totally different
+  manner than the original. All the underlying mental models are different, and
+  simpler.
 - Drop support for all async runtimes other than `tokio`. Rewrite all the code for
   this.
 - Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code
   for this.
 - Drop `simplelog` and `log` dependencies. Add support for `tokio-tracing`. Rewrite
   all the code for this, and add `tracing_setup.rs`.
-- Rewrite main example `examples/readline.rs` to mimic a real world CLI application.
-  Add more examples.
+- Remove all examples and create new ones to mimic a real world CLI application.
 - Add `spinner_impl`, `readline_impl`, and `public_api` modules.
 - Add tests.
 

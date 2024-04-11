@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{SafeRawTerminal, SpinnerRender, SpinnerStyle};
+use crate::{LineControlSignal, SafeRawTerminal, SharedWriter, SpinnerRender, SpinnerStyle};
 use crossterm::terminal;
 use miette::miette;
 use r3bl_tuify::{
@@ -36,6 +36,8 @@ pub struct Spinner {
     pub style: SpinnerStyle,
 
     pub safe_output_terminal: SafeRawTerminal,
+
+    pub shared_writer: SharedWriter,
 }
 
 // 01: add tests
@@ -79,6 +81,7 @@ impl Spinner {
         tick_delay: Duration,
         style: SpinnerStyle,
         safe_output_terminal: SafeRawTerminal,
+        shared_writer: SharedWriter,
     ) -> miette::Result<Option<Spinner>> {
         if let StdoutIsPipedResult::StdoutIsPiped = is_stdout_piped() {
             return Ok(None);
@@ -94,6 +97,7 @@ impl Spinner {
             abort_handle: Arc::new(Mutex::new(None)),
             style,
             safe_output_terminal,
+            shared_writer,
         };
 
         // Start task and get the abort_handle.
@@ -109,6 +113,13 @@ impl Spinner {
         if abort_handle::is_set(&self.abort_handle).await {
             return Err(miette!("Task is already running"));
         }
+
+        // Pause the terminal.
+        let _ = self
+            .shared_writer
+            .line_sender
+            .send(LineControlSignal::Pause)
+            .await;
 
         let message = self.message.clone();
         let tick_delay = self.tick_delay;
@@ -162,6 +173,13 @@ impl Spinner {
                     &mut *self.safe_output_terminal.clone().lock().await,
                 )
                 .await?;
+
+            // Resume the terminal.
+            let _ = self
+                .shared_writer
+                .line_sender
+                .send(LineControlSignal::Resume)
+                .await;
         }
 
         Ok(())

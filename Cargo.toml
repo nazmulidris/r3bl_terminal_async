@@ -10,14 +10,11 @@ edition = "2021"
 
 [dependencies]
 # Terminal output.
-crossterm = { version = "0.27.0", features = ["event-stream"] }
+crossterm = { version = "0.27.0", features = ["event-stream"] }           # EventStream
+futures-util = "0.3.30"                                                   # Needed for crossterm EventStream
 r3bl_tuify = { path = "/home/nazmul/github/r3bl-open-core/tuify" }
 r3bl_tui = { path = "/home/nazmul/github/r3bl-open-core/tui" }
 r3bl_rs_utils_core = { path = "/home/nazmul/github/r3bl-open-core/core" }
-
-# Needed for `fuse()`.
-futures-channel = "0.3"
-futures-util = { version = "0.3", features = ["io"] }
 
 # Unicode support.
 unicode-segmentation = "1.10"
@@ -43,9 +40,9 @@ tracing-appender = "0.2.3"
 [dev-dependencies]
 # 00: drop these later since this path is abandoned
 # Async stream testing.
-futures-core = "0.3"
-async-stream = "0.3.5"
-tokio-stream = "0.1.15"
+# futures-core = "0.3"
+# async-stream = "0.3.5"
+# tokio-stream = "0.1.15"
 strip-ansi-escapes = "0.2.0"
 
 [features]
