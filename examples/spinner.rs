@@ -16,7 +16,7 @@
  */
 
 use r3bl_terminal_async::{
-    FuturesMutex, Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync,
+    Spinner, SpinnerColor, SpinnerStyle, SpinnerTemplate, TerminalAsync, TokioMutex,
     ARTIFICIAL_UI_DELAY, DELAY_MS, DELAY_UNIT,
 };
 use std::{io::stderr, time::Duration};
@@ -52,7 +52,7 @@ pub async fn main() -> miette::Result<()> {
 #[allow(unused_assignments)]
 async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<()> {
     let terminal_async = TerminalAsync::try_new("$ ").await?;
-    let mut terminal_async = terminal_async.expect("terminal is not fully interactive");
+    let terminal_async = terminal_async.expect("terminal is not fully interactive");
     let address = "127.0.0.1:8000";
     let message_trying_to_connect = format!(
         "This is a sample indeterminate progress message: trying to connect to server on {}",
@@ -61,14 +61,13 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
 
     let mut shared_writer = terminal_async.clone_shared_writer();
 
-    // Pause terminal.
-    terminal_async.pause().await;
-
+    // Start spinner. Automatically pauses the terminal.
     let mut maybe_spinner = Spinner::try_start(
         message_trying_to_connect.clone(),
         DELAY_UNIT,
         style,
-        Arc::new(FuturesMutex::new(stderr())),
+        Arc::new(TokioMutex::new(stderr())),
+        shared_writer.clone(),
     )
     .await?;
 
@@ -88,19 +87,18 @@ async fn example_with_concurrent_output(style: SpinnerStyle) -> miette::Result<(
             if elapsed >= duration {
                 break;
             }
-            let _ = writeln!(shared_writer, "foo");
+            let _ = writeln!(shared_writer, "⏳foo");
         }
     }));
 
-    // Stop progress bar.
+    // Stop spinner. Automatically resumes the terminal.
     if let Some(spinner) = maybe_spinner.as_mut() {
         spinner
             .stop("This is a sample final message for the spinner component: Connected to server")
             .await?;
     }
 
-    // Resume terminal.
-    terminal_async.resume().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     Ok(())
 }

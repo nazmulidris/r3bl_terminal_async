@@ -17,6 +17,7 @@
 
 use crossterm::style::Stylize;
 use miette::IntoDiagnostic;
+use r3bl_terminal_async::{LineControlSignal, Spinner, SpinnerStyle};
 use r3bl_terminal_async::{Readline, ReadlineEvent, SharedWriter, TerminalAsync};
 use std::{io::Write, ops::ControlFlow, time::Duration};
 use strum::IntoEnumIterator;
@@ -35,6 +36,9 @@ use helpers::tracing_setup::{self};
 /// - <https://docs.rs/strum_macros/latest/strum_macros/derive.EnumIter.html>
 #[derive(Debug, PartialEq, EnumString, EnumIter, Display)]
 enum Command {
+    #[strum(ascii_case_insensitive)]
+    Spinner,
+
     #[strum(ascii_case_insensitive)]
     StartTask1,
 
@@ -68,8 +72,9 @@ fn get_info_message() -> String {
         format!("{:?}", commands).blue()
     };
     let info_message = format!(
-        "try Ctrl+D, Up, Down, `{}`, `{}`, and `{}`",
+        "try Ctrl+D, Up, Down, `{}`, `{}`, `{}`, and `{}`",
         Command::StartTask1,
+        Command::Spinner,
         Command::StartTask2,
         Command::StopPrintouts
     );
@@ -216,20 +221,25 @@ mod process_input_event {
     pub async fn process_readline_event(
         readline_event: ReadlineEvent,
         state: &mut State,
-        stdout: &mut SharedWriter,
+        shared_writer: &mut SharedWriter,
         readline: &mut Readline,
     ) -> miette::Result<ControlFlow<()>> {
         match readline_event {
             ReadlineEvent::Line(user_input) => {
-                process_user_input(user_input, state, stdout, readline).await
+                process_user_input(user_input, state, shared_writer, readline).await
             }
             ReadlineEvent::Eof => {
-                writeln!(stdout, "{}", "Exiting due to Eof...".red().bold()).into_diagnostic()?;
+                writeln!(shared_writer, "{}", "Exiting due to Eof...".red().bold())
+                    .into_diagnostic()?;
                 Ok(ControlFlow::Break(()))
             }
             ReadlineEvent::Interrupted => {
-                writeln!(stdout, "{}", "Exiting due to ^C pressed...".red().bold())
-                    .into_diagnostic()?;
+                writeln!(
+                    shared_writer,
+                    "{}",
+                    "Exiting due to ^C pressed...".red().bold()
+                )
+                .into_diagnostic()?;
                 Ok(ControlFlow::Break(()))
             }
         }
@@ -238,7 +248,7 @@ mod process_input_event {
     async fn process_user_input(
         user_input: String,
         state: &mut State,
-        stdout: &mut SharedWriter,
+        shared_writer: &mut SharedWriter,
         readline: &mut Readline,
     ) -> miette::Result<ControlFlow<()>> {
         // Add to history.
@@ -249,51 +259,122 @@ mod process_input_event {
         let result_command = Command::from_str(&line.trim().to_lowercase());
         match result_command {
             Err(_) => {
-                writeln!(stdout, "Unknown command!").into_diagnostic()?;
+                writeln!(shared_writer, "Unknown command!").into_diagnostic()?;
                 return Ok(ControlFlow::Continue(()));
             }
             Ok(command) => match command {
                 Command::Exit => {
-                    writeln!(stdout, "{}", "Exiting due to exit command...".red())
+                    writeln!(shared_writer, "{}", "Exiting due to exit command...".red())
                         .into_diagnostic()?;
-                    readline.close();
+                    readline.close().await;
                     return Ok(ControlFlow::Break(()));
                 }
                 Command::StartTask1 => {
                     state.task_1_state.is_running = true;
-                    writeln!(stdout, "First task started! This prints to stdout.")
+                    writeln!(shared_writer, "First task started! This prints to stdout.")
                         .into_diagnostic()?;
                 }
                 Command::StopTask1 => {
                     state.task_1_state.is_running = false;
-                    writeln!(stdout, "First task stopped!").into_diagnostic()?;
+                    writeln!(shared_writer, "First task stopped!").into_diagnostic()?;
                 }
                 Command::StartTask2 => {
                     state.task_2_state.is_running = true;
                     writeln!(
-                        stdout,
+                        shared_writer,
                         "Second task started! This generates logs which print to stdout"
                     )
                     .into_diagnostic()?;
                 }
                 Command::StopTask2 => {
                     state.task_2_state.is_running = false;
-                    writeln!(stdout, "Second task stopped!").into_diagnostic()?;
+                    writeln!(shared_writer, "Second task stopped!").into_diagnostic()?;
                 }
                 Command::StartPrintouts => {
-                    writeln!(stdout, "Printouts started!").into_diagnostic()?;
+                    writeln!(shared_writer, "Printouts started!").into_diagnostic()?;
                     readline.should_print_line_on(true, true).await;
                 }
                 Command::StopPrintouts => {
-                    writeln!(stdout, "Printouts stopped!").into_diagnostic()?;
+                    writeln!(shared_writer, "Printouts stopped!").into_diagnostic()?;
                     readline.should_print_line_on(false, false).await;
                 }
                 Command::Info => {
-                    writeln!(stdout, "{}", get_info_message()).into_diagnostic()?;
+                    writeln!(shared_writer, "{}", get_info_message()).into_diagnostic()?;
+                }
+                Command::Spinner => {
+                    writeln!(shared_writer, "Spinner started! Pausing terminal...")
+                        .into_diagnostic()?;
+                    long_running_task::spawn_task_that_shows_spinner(
+                        shared_writer,
+                        "Spinner task",
+                        Duration::from_secs(1),
+                    );
                 }
             },
         }
 
         Ok(ControlFlow::Continue(()))
+    }
+}
+
+mod long_running_task {
+    use std::{io::stderr, sync::Arc};
+
+    use r3bl_terminal_async::TokioMutex;
+
+    use super::*;
+
+    // Spawn a task that uses the shared writer to print to stdout, and pauses the spinner
+    // at the start, and resumes it when it ends.
+    pub fn spawn_task_that_shows_spinner(
+        shared_writer: &mut SharedWriter,
+        task_name: &str,
+        delay: Duration,
+    ) {
+        let mut interval = interval(delay);
+        let mut tick_counter = 0;
+        let max_tick_count = 3;
+
+        let line_sender = shared_writer.line_sender.clone();
+        let task_name = task_name.to_string();
+
+        let shared_writer_clone = shared_writer.clone();
+
+        tokio::spawn(async move {
+            // Create a spinner.
+            let maybe_spinner = Spinner::try_start(
+                format!(
+                    "{} - This is a sample indeterminate progress message",
+                    task_name
+                ),
+                Duration::from_millis(100),
+                SpinnerStyle::default(),
+                Arc::new(TokioMutex::new(stderr())),
+                shared_writer_clone,
+            )
+            .await;
+
+            loop {
+                // Wait for the interval duration (one tick).
+                interval.tick().await;
+
+                // Don't print more than `max_tick_count` times.
+                tick_counter += 1;
+                if tick_counter >= max_tick_count {
+                    break;
+                }
+
+                // Display a message at every tick.
+                let msg = format!("[{task_name}] - [{tick_counter}] interval went off while spinner was spinning!\n");
+                let _ = line_sender
+                    .send(LineControlSignal::Line(msg.into_bytes()))
+                    .await;
+            }
+
+            if let Ok(Some(mut spinner)) = maybe_spinner {
+                let msg = format!("{} - Task ended. Resuming terminal and showing any output that was generated while spinner was active.", task_name);
+                let _ = spinner.stop(msg.as_str()).await;
+            }
+        });
     }
 }

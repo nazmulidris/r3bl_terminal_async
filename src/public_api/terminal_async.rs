@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-use crate::{FuturesMutex, Readline, ReadlineEvent, SharedWriter};
+use crate::{Readline, ReadlineEvent, SharedWriter, TokioMutex};
 use crossterm::style::Stylize;
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
@@ -62,7 +62,7 @@ impl TerminalAsync {
             return Ok(None);
         }
 
-        let safe_raw_terminal = Arc::new(FuturesMutex::new(stdout()));
+        let safe_raw_terminal = Arc::new(TokioMutex::new(stdout()));
         let (readline, stdout) = Readline::new(prompt.to_owned(), safe_raw_terminal)
             .await
             .into_diagnostic()?;
@@ -107,21 +107,33 @@ impl TerminalAsync {
     /// Simply flush the buffer. If there's a newline in the buffer, it will be printed.
     /// Otherwise it won't.
     pub async fn flush(&mut self) {
-        let _ = self.readline.flush().await;
+        let _ = self
+            .shared_writer
+            .line_sender
+            .send(crate::LineControlSignal::Flush)
+            .await;
     }
 
     pub async fn pause(&mut self) {
-        self.readline.pause().await;
+        let _ = self
+            .shared_writer
+            .line_sender
+            .send(crate::LineControlSignal::Pause)
+            .await;
     }
 
     pub async fn resume(&mut self) {
-        self.readline.resume().await;
+        let _ = self
+            .shared_writer
+            .line_sender
+            .send(crate::LineControlSignal::Resume)
+            .await;
     }
 
     /// Close the underlying [Readline] instance. This will terminate all the tasks that
     /// are managing [SharedWriter] tasks. This is useful when you want to exit the CLI
     /// event loop, typically when the user requests it.
     pub async fn close(&mut self) {
-        self.readline.close();
+        self.readline.close().await;
     }
 }

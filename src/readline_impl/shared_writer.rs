@@ -27,8 +27,9 @@ use std::io::{self, Write};
 /// also returns a [`crate::Readline`] instance associated with the writer.
 ///
 /// Data written to a `SharedWriter` is only output when a line feed (`'\n'`) has been
-/// written and either [`crate::Readline::readline()`] or [`crate::Readline::flush()`] is
-/// executing on the associated `Readline` instance.
+/// written and either [`crate::Readline::readline()`] or
+/// [`crate::pause_and_resume_support::flush_internal()`] is executing on the associated
+/// `Readline` instance.
 pub struct SharedWriter {
     /// Holds the data to be written to the terminal.
     pub buffer: Text,
@@ -38,6 +39,10 @@ pub struct SharedWriter {
     pub line_sender: tokio::sync::mpsc::Sender<LineControlSignal>,
 }
 
+/// Custom [Clone] implementation for [`SharedWriter`]. This ensures that each new
+/// instance gets its own buffer to write data into. And a [Clone] of the
+/// [Self::line_sender], so all the [`LineControlSignal`]s end up in the same `line`
+/// [tokio::sync::mpsc::channel] that lives in the [`crate::Readline`] instance.
 impl Clone for SharedWriter {
     fn clone(&self) -> Self {
         Self {
