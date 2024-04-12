@@ -307,7 +307,7 @@ mod process_input_event {
                     long_running_task::spawn_task_that_shows_spinner(
                         shared_writer,
                         "Spinner task",
-                        Duration::from_secs(1),
+                        Duration::from_millis(100),
                     );
                 }
             },
@@ -333,7 +333,7 @@ mod long_running_task {
     ) {
         let mut interval = interval(delay);
         let mut tick_counter = 0;
-        let max_tick_count = 3;
+        let max_tick_count = 30;
 
         let line_sender = shared_writer.line_sender.clone();
         let task_name = task_name.to_string();

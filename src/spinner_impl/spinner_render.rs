@@ -68,7 +68,9 @@ impl SpinnerRender for SpinnerStyle {
                     ch!(display_width) - ch!(padding_right.len()),
                 );
                 let output_message = format!("{clipped_message}{padding_right}");
-                clip_string_to_width_with_ellipsis(output_message, ch!(display_width))
+                let clipped_message =
+                    clip_string_to_width_with_ellipsis(output_message, ch!(display_width));
+                apply_color(clipped_message.as_str(), &mut self.color)
             }
             SpinnerTemplate::Braille => {
                 // Translate count into the index of the BRAILLE_DOTS array.
@@ -79,6 +81,7 @@ impl SpinnerRender for SpinnerStyle {
                     message.to_string(),
                     ch!(display_width) - ch!(2),
                 );
+                let clipped_message = apply_color(&clipped_message, &mut self.color);
                 format!("{output_symbol} {clipped_message}")
             }
             SpinnerTemplate::Block => {
@@ -90,6 +93,7 @@ impl SpinnerRender for SpinnerStyle {
                     message.to_string(),
                     ch!(display_width) - ch!(2),
                 );
+                let clipped_message = apply_color(&clipped_message, &mut self.color);
                 format!("{output_symbol} {clipped_message}")
             }
         }
