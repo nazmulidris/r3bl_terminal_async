@@ -226,15 +226,20 @@
 //!   - [Build with Naz, async readline and spinner for CLI in Rust](https://www.youtube.com/watch?v=3vQJguti02I&list=PLofhE49PEwmwelPkhfiqdFQ9IXnmGdnSE)
 //!   - [Build with Naz, testing in Rust](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
 
+// Attach sources.
 pub mod public_api;
 pub mod readline_impl;
 pub mod spinner_impl;
 
-use std::collections::VecDeque;
-
+// Re-export the public API.
 pub use public_api::*;
 pub use readline_impl::*;
 pub use spinner_impl::*;
+
+// Type aliases.
+use crossterm::event::Event;
+use futures_core::Stream;
+use std::{collections::VecDeque, io::Error, pin::Pin};
 
 pub type StdMutex<T> = std::sync::Mutex<T>;
 pub type TokioMutex<T> = tokio::sync::Mutex<T>;
@@ -250,5 +255,8 @@ pub type Text = Vec<u8>;
 
 pub type PauseBuffer = VecDeque<Text>;
 
+pub type PinnedInputStream = Pin<Box<dyn Stream<Item = Result<Event, Error>>>>;
+
+// Constants.
 pub const CHANNEL_CAPACITY: usize = 1_000;
 pub const HISTORY_SIZE_MAX: usize = 1_000;

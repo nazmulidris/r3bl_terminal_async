@@ -16,11 +16,11 @@
  */
 
 use crate::{
-    History, LineState, PauseBuffer, SafeBool, SafeHistory, SafeLineState, SafeRawTerminal,
-    SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
+    History, LineState, PauseBuffer, PinnedInputStream, SafeBool, SafeHistory, SafeLineState,
+    SafeRawTerminal, SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
 };
 use crossterm::{
-    event::{Event, EventStream},
+    event::Event,
     terminal::{self, disable_raw_mode, Clear},
     QueueableCommand,
 };
@@ -101,7 +101,7 @@ pub struct Readline {
     pub safe_raw_terminal: SafeRawTerminal,
 
     /// Stream of events.
-    pub event_stream: EventStream,
+    pub pinned_input_stream: PinnedInputStream,
 
     /// Current line.
     pub safe_line_state: SafeLineState,
@@ -320,6 +320,7 @@ impl Readline {
     pub async fn new(
         prompt: String,
         safe_raw_terminal: SafeRawTerminal,
+        /* move */ pinned_input_stream: PinnedInputStream,
     ) -> Result<(Self, SharedWriter), ReadlineError> {
         // Line channel.
         let line_channel = tokio::sync::mpsc::channel::<LineControlSignal>(CHANNEL_CAPACITY);
@@ -353,7 +354,7 @@ impl Readline {
         // Create the instance with all the supplied components.
         let readline = Readline {
             safe_raw_terminal: safe_raw_terminal.clone(),
-            event_stream: EventStream::new(),
+            pinned_input_stream,
             safe_line_state: safe_line_state.clone(),
             history_sender,
             safe_is_paused: safe_is_paused.clone(),
@@ -437,7 +438,7 @@ impl Readline {
         loop {
             tokio::select! {
                 // Poll for events.
-                maybe_result_crossterm_event = self.event_stream.next() => {
+                maybe_result_crossterm_event = self.pinned_input_stream.next() => {
                     match readline_internal::process_event(
                         maybe_result_crossterm_event,
                         self.safe_line_state.clone(),
@@ -525,7 +526,7 @@ impl Readline {
 mod tests {
     use super::*;
     use crate::StdMutex;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{EventStream, KeyCode, KeyEvent, KeyModifiers};
     use strip_ansi_escapes::strip;
 
     #[derive(Clone)]
@@ -560,6 +561,7 @@ mod tests {
         let (readline, _) = Readline::new(
             prompt_str.into(),
             Arc::new(TokioMutex::new(stdout_mock.clone())),
+            Box::pin(EventStream::new()), // 00: replace with a mock stream
         )
         .await
         .unwrap();
@@ -603,34 +605,54 @@ mod tests {
 
 #[cfg(test)]
 mod test_streams {
-    // use super::tests::get_input_vec;
-    // use super::*;
+    use super::tests::get_input_vec;
+    use super::*;
+    use async_stream::stream;
+    use futures_core::stream::Stream;
+    use futures_util::pin_mut;
 
     // 00: use this as inspiration to change readline, so that it can accept a param of type Stream<Item = T>
-    // #[tokio::test]
-    // async fn test_generate_event_stream() {
-    //     use async_stream::stream;
-    //     use futures_core::stream::Stream;
-    //     use futures_util::pin_mut;
-    //     use futures_util::stream::StreamExt;
+    #[tokio::test]
+    async fn test_generate_event_stream() {
+        fn gen_stream() -> impl Stream<Item = Event> {
+            stream! {
+                for event in get_input_vec() {
+                    yield event;
+                }
+            }
+        }
 
-    //     fn gen_stream() -> impl Stream<Item = Event> {
-    //         stream! {
-    //             for event in get_input_vec() {
-    //                 yield event;
-    //             }
-    //         }
-    //     }
+        let stream = gen_stream();
+        pin_mut!(stream);
 
-    //     let stream = gen_stream();
-    //     pin_mut!(stream);
+        let mut count = 0;
+        while let Some(event) = stream.next().await {
+            assert_eq!(event, get_input_vec()[count]);
+            count += 1;
+        }
+    }
 
-    //     let mut count = 0;
-    //     while let Some(event) = stream.next().await {
-    //         assert_eq!(event, get_input_vec()[count]);
-    //         count += 1;
-    //     }
-    // }
+    #[tokio::test]
+    async fn test_generate_event_stream_pinned() {
+        fn gen_stream() -> PinnedInputStream {
+            let it = stream! {
+                for event in get_input_vec() {
+                    yield Ok(event);
+                }
+            };
+            Box::pin(it)
+        }
+
+        let mut count = 0;
+        let mut it = Box::pin(gen_stream());
+
+        while let Some(event) = it.next().await {
+            let lhs = event.unwrap();
+            let rhs = get_input_vec()[count].clone();
+            assert_eq!(lhs, rhs);
+            count += 1;
+        }
+    }
 }
 
 // 00: clean this up
