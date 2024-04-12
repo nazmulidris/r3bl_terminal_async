@@ -15,8 +15,8 @@
  *   limitations under the License.
  */
 
-use crate::{Readline, ReadlineEvent, SharedWriter, TokioMutex};
-use crossterm::style::Stylize;
+use crate::{PinnedInputStream, Readline, ReadlineEvent, SharedWriter, TokioMutex};
+use crossterm::{event::EventStream, style::Stylize};
 use futures_util::FutureExt;
 use miette::IntoDiagnostic;
 use r3bl_tuify::{
@@ -63,9 +63,11 @@ impl TerminalAsync {
         }
 
         let safe_raw_terminal = Arc::new(TokioMutex::new(stdout()));
-        let (readline, stdout) = Readline::new(prompt.to_owned(), safe_raw_terminal)
-            .await
-            .into_diagnostic()?;
+        let pinned_input_stream: PinnedInputStream = Box::pin(EventStream::new());
+        let (readline, stdout) =
+            Readline::new(prompt.to_owned(), safe_raw_terminal, pinned_input_stream)
+                .await
+                .into_diagnostic()?;
         Ok(Some(TerminalAsync {
             readline,
             shared_writer: stdout,

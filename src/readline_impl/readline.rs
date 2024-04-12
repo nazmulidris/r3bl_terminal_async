@@ -16,11 +16,11 @@
  */
 
 use crate::{
-    History, LineState, PauseBuffer, SafeBool, SafeHistory, SafeLineState, SafeRawTerminal,
-    SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
+    History, LineState, PauseBuffer, PinnedInputStream, SafeBool, SafeHistory, SafeLineState,
+    SafeRawTerminal, SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
 };
 use crossterm::{
-    event::{Event, EventStream},
+    event::Event,
     terminal::{self, disable_raw_mode, Clear},
     QueueableCommand,
 };
@@ -101,7 +101,7 @@ pub struct Readline {
     pub safe_raw_terminal: SafeRawTerminal,
 
     /// Stream of events.
-    pub event_stream: EventStream,
+    pub pinned_input_stream: PinnedInputStream,
 
     /// Current line.
     pub safe_line_state: SafeLineState,
@@ -320,6 +320,7 @@ impl Readline {
     pub async fn new(
         prompt: String,
         safe_raw_terminal: SafeRawTerminal,
+        /* move */ pinned_input_stream: PinnedInputStream,
     ) -> Result<(Self, SharedWriter), ReadlineError> {
         // Line channel.
         let line_channel = tokio::sync::mpsc::channel::<LineControlSignal>(CHANNEL_CAPACITY);
@@ -353,7 +354,7 @@ impl Readline {
         // Create the instance with all the supplied components.
         let readline = Readline {
             safe_raw_terminal: safe_raw_terminal.clone(),
-            event_stream: EventStream::new(),
+            pinned_input_stream,
             safe_line_state: safe_line_state.clone(),
             history_sender,
             safe_is_paused: safe_is_paused.clone(),
@@ -437,7 +438,7 @@ impl Readline {
         loop {
             tokio::select! {
                 // Poll for events.
-                maybe_result_crossterm_event = self.event_stream.next() => {
+                maybe_result_crossterm_event = self.pinned_input_stream.next() => {
                     match readline_internal::process_event(
                         maybe_result_crossterm_event,
                         self.safe_line_state.clone(),
@@ -522,11 +523,34 @@ impl Readline {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod test_fixtures {
     use crate::StdMutex;
+
+    use super::*;
+    use async_stream::stream;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use strip_ansi_escapes::strip;
+
+    pub(super) fn gen_input_stream() -> PinnedInputStream {
+        let it = stream! {
+            for event in get_input_vec() {
+                yield Ok(event);
+            }
+        };
+        Box::pin(it)
+    }
+
+    pub(super) fn get_input_vec() -> Vec<Event> {
+        vec![
+            // a
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            // b
+            Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+            // c
+            Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            // enter
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        ]
+    }
 
     #[derive(Clone)]
     pub struct StdoutMock {
@@ -543,9 +567,16 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strip_ansi_escapes::strip;
+    use tests::test_fixtures::{gen_input_stream, get_input_vec, StdoutMock};
 
     #[tokio::test]
-    async fn test_readline_process_event_and_terminal_output() {
+    async fn test_readline_internal_process_event_and_terminal_output() {
         let vec = get_input_vec();
         let mut iter = vec.iter();
 
@@ -560,6 +591,7 @@ mod tests {
         let (readline, _) = Readline::new(
             prompt_str.into(),
             Arc::new(TokioMutex::new(stdout_mock.clone())),
+            gen_input_stream(),
         )
         .await
         .unwrap();
@@ -587,72 +619,51 @@ mod tests {
         assert!(output_buffer_data.contains("> a"));
     }
 
-    pub(super) fn get_input_vec() -> Vec<Event> {
-        vec![
-            // a
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
-            // b
-            Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
-            // c
-            Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-            // enter
-            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        ]
+    #[tokio::test]
+    async fn test_readline() {
+        let prompt_str = "> ";
+
+        let output_buffer = Vec::new();
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(std::sync::Mutex::new(output_buffer)),
+        };
+
+        // We will get the `line_state` out of this to test.
+        let (mut readline, _) = Readline::new(
+            prompt_str.into(),
+            Arc::new(TokioMutex::new(stdout_mock.clone())),
+            gen_input_stream(),
+        )
+        .await
+        .unwrap();
+
+        let result = readline.readline().await;
+        assert!(matches!(result, Ok(ReadlineEvent::Line(_))));
+        pretty_assertions::assert_eq!(result.unwrap(), ReadlineEvent::Line("abc".to_string()));
+        pretty_assertions::assert_eq!(readline.safe_line_state.lock().await.line, "");
+
+        let output_buffer_data = stdout_mock.buffer.lock().unwrap();
+        let output_buffer_data = strip(output_buffer_data.to_vec());
+        let output_buffer_data = String::from_utf8(output_buffer_data).expect("utf8");
+        // println!("\n`{}`\n", output_buffer_data);
+        assert!(output_buffer_data.contains("> abc"));
     }
 }
 
 #[cfg(test)]
 mod test_streams {
-    // use super::tests::get_input_vec;
-    // use super::*;
+    use super::*;
+    use test_streams::test_fixtures::{gen_input_stream, get_input_vec};
 
-    // 00: use this as inspiration to change readline, so that it can accept a param of type Stream<Item = T>
-    // #[tokio::test]
-    // async fn test_generate_event_stream() {
-    //     use async_stream::stream;
-    //     use futures_core::stream::Stream;
-    //     use futures_util::pin_mut;
-    //     use futures_util::stream::StreamExt;
-
-    //     fn gen_stream() -> impl Stream<Item = Event> {
-    //         stream! {
-    //             for event in get_input_vec() {
-    //                 yield event;
-    //             }
-    //         }
-    //     }
-
-    //     let stream = gen_stream();
-    //     pin_mut!(stream);
-
-    //     let mut count = 0;
-    //     while let Some(event) = stream.next().await {
-    //         assert_eq!(event, get_input_vec()[count]);
-    //         count += 1;
-    //     }
-    // }
-}
-
-// 00: clean this up
-#[cfg(test)]
-mod tests_terminal_writer_exp {
-    use crossterm::{queue, terminal};
-    use miette::IntoDiagnostic;
-    use std::io::{stdout, Write};
-
-    #[test]
-    fn test_stand_ins_for_stdout() -> miette::Result<()> {
-        let stdout = stdout();
-        do_with_stdout(stdout)?;
-        Ok(())
-    }
-
-    fn do_with_stdout(mut write: impl Write) -> miette::Result<()> {
-        queue! {
-            write,
-            terminal::EnableLineWrap
+    #[tokio::test]
+    async fn test_generate_event_stream_pinned() {
+        let mut count = 0;
+        let mut it = gen_input_stream();
+        while let Some(event) = it.next().await {
+            let lhs = event.unwrap();
+            let rhs = get_input_vec()[count].clone();
+            assert_eq!(lhs, rhs);
+            count += 1;
         }
-        .into_diagnostic()?;
-        Ok(())
     }
 }
