@@ -15,7 +15,9 @@
  *   limitations under the License.
  */
 
-use crate::{LineControlSignal, SafeRawTerminal, SharedWriter, SpinnerRender, SpinnerStyle};
+use crate::{
+    LineControlSignal, SafeRawTerminal, SharedWriter, SpinnerRender, SpinnerStyle, TokioMutex,
+};
 use crossterm::terminal;
 use miette::miette;
 use r3bl_tuify::{
@@ -39,8 +41,6 @@ pub struct Spinner {
 
     pub shared_writer: SharedWriter,
 }
-
-// 01: add tests
 
 mod abort_handle {
     use super::*;
@@ -94,7 +94,7 @@ impl Spinner {
         let mut spinner = Spinner {
             message: spinner_message,
             tick_delay,
-            abort_handle: Arc::new(Mutex::new(None)),
+            abort_handle: Arc::new(TokioMutex::new(None)),
             style,
             safe_output_terminal,
             shared_writer,
@@ -190,5 +190,158 @@ fn get_terminal_display_width() -> usize {
     match terminal::size() {
         Ok((columns, _rows)) => columns as usize,
         Err(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use strip_ansi_escapes::strip;
+
+    use crate::{test_fixtures::StdoutMock, SpinnerColor, StdMutex};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_spinner_color() {
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let safe_output_terminal = Arc::new(TokioMutex::new(stdout_mock.clone()));
+
+        let (line_sender, mut line_receiver) = tokio::sync::mpsc::channel(1_000);
+        let shared_writer = SharedWriter {
+            buffer: Vec::new(),
+            line_sender,
+        };
+
+        let quantum = Duration::from_millis(100);
+
+        let spinner = Spinner::try_start(
+            "message".to_string(),
+            quantum,
+            SpinnerStyle {
+                template: crate::SpinnerTemplate::Braille,
+                color: SpinnerColor::None,
+            },
+            safe_output_terminal,
+            shared_writer,
+        )
+        .await;
+
+        let mut spinner = spinner.unwrap().unwrap();
+
+        tokio::time::sleep(quantum * 5).await;
+
+        spinner.stop("final message").await.unwrap();
+
+        // This block ensures that the mutex guard is dropped correctly.
+        {
+            let output_buffer_data = stdout_mock.buffer.lock().unwrap();
+            let output_buffer_data = strip(output_buffer_data.to_vec());
+            let output_buffer_data = String::from_utf8(output_buffer_data).expect("utf8");
+            // println!("{:?}", output_buffer_data);
+            assert!(output_buffer_data.contains("final message"));
+            assert_eq!(
+                output_buffer_data,
+                "⠁ message\n⠃ message\n⡇ message\n⠇ message\n⡎ message\nfinal message\n"
+            );
+        }
+
+        let mut line_control_signal_sink = vec![];
+        loop {
+            let it = line_receiver.try_recv();
+            match it {
+                Ok(_) => {
+                    line_control_signal_sink.push(it.clone());
+                }
+                Err(error) => match error {
+                    tokio::sync::mpsc::error::TryRecvError::Empty => {
+                        break;
+                    }
+                    tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+                        break;
+                    }
+                },
+            }
+        }
+        // println!("{:?}", line_control_signal_sink);
+
+        assert_eq!(line_control_signal_sink.len(), 2);
+        assert_eq!(line_control_signal_sink[0], Ok(LineControlSignal::Pause));
+        assert_eq!(line_control_signal_sink[1], Ok(LineControlSignal::Resume));
+
+        drop(line_receiver);
+    }
+
+    #[tokio::test]
+    async fn test_spinner_no_color() {
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let safe_output_terminal = Arc::new(TokioMutex::new(stdout_mock.clone()));
+
+        let (line_sender, mut line_receiver) = tokio::sync::mpsc::channel(1_000);
+        let shared_writer = SharedWriter {
+            buffer: Vec::new(),
+            line_sender,
+        };
+
+        let quantum = Duration::from_millis(100);
+
+        let spinner = Spinner::try_start(
+            "message".to_string(),
+            quantum,
+            SpinnerStyle::default(),
+            safe_output_terminal,
+            shared_writer,
+        )
+        .await;
+
+        let mut spinner = spinner.unwrap().unwrap();
+
+        tokio::time::sleep(quantum * 5).await;
+
+        spinner.stop("final message").await.unwrap();
+
+        // This block ensures that the mutex guard is dropped correctly.
+        {
+            let output_buffer_data = stdout_mock.buffer.lock().unwrap();
+            // let output_buffer_data = strip(output_buffer_data.to_vec());
+            let output_buffer_data = String::from_utf8(output_buffer_data.to_vec()).expect("utf8");
+            // println!("{:?}", output_buffer_data);
+            assert!(output_buffer_data.contains("final message"));
+            assert_ne!(
+                output_buffer_data,
+                "⠁ message\n⠃ message\n⡇ message\n⠇ message\n⡎ message\nfinal message\n"
+            );
+            assert!(output_buffer_data.contains("\u{1b}[1G\u{1b}[2K\u{1b}[38;2;18;194;233m⠁\u{1b}[39m \u{1b}[38;2;18;194;233mmessage"));
+            assert!(output_buffer_data
+                .contains("\u{1b}[39m\n\u{1b}[1A\u{1b}[1G\u{1b}[2Kfinal message\n"));
+        }
+
+        let mut line_control_signal_sink = vec![];
+        loop {
+            let it = line_receiver.try_recv();
+            match it {
+                Ok(_) => {
+                    line_control_signal_sink.push(it.clone());
+                }
+                Err(error) => match error {
+                    tokio::sync::mpsc::error::TryRecvError::Empty => {
+                        break;
+                    }
+                    tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+                        break;
+                    }
+                },
+            }
+        }
+        // println!("{:?}", line_control_signal_sink);
+
+        assert_eq!(line_control_signal_sink.len(), 2);
+        assert_eq!(line_control_signal_sink[0], Ok(LineControlSignal::Pause));
+        assert_eq!(line_control_signal_sink[1], Ok(LineControlSignal::Resume));
+
+        drop(line_receiver);
     }
 }

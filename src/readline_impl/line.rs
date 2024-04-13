@@ -29,8 +29,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{ReadlineError, ReadlineEvent, SafeHistory};
 
-// 01: add tests
-
 pub struct LineState {
     /// Unicode line.
     pub line: String,
@@ -421,7 +419,7 @@ impl LineState {
                 }
                 KeyCode::Up => {
                     // search for next history item, replace line if found.
-                    if let Some(line) = safe_history.lock().await.search_next(&self.line) {
+                    if let Some(line) = safe_history.lock().await.search_next() {
                         self.line.clear();
                         self.line += line;
                         self.clear(term)?;
@@ -431,7 +429,7 @@ impl LineState {
                 }
                 KeyCode::Down => {
                     // search for next history item, replace line if found.
-                    if let Some(line) = safe_history.lock().await.search_previous(&self.line) {
+                    if let Some(line) = safe_history.lock().await.search_previous() {
                         self.line.clear();
                         self.line += line;
                         self.clear(term)?;
@@ -473,5 +471,81 @@ impl LineState {
             _ => {}
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{test_fixtures::StdoutMock, History, StdMutex, TokioMutex};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_add_char() {
+        let mut line = LineState::new("foo".into(), (100, 100));
+
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let safe_output_terminal = Arc::new(TokioMutex::new(stdout_mock.clone()));
+
+        let (history, _) = History::new();
+        let safe_history = Arc::new(TokioMutex::new(history));
+
+        let event = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        let it = line
+            .handle_event(event, &mut *safe_output_terminal.lock().await, safe_history)
+            .await;
+
+        assert!(matches!(it, Ok(None)));
+
+        assert_eq!(line.line, "a");
+    }
+
+    #[tokio::test]
+    async fn test_move_cursor() {
+        let mut line = LineState::new("foo".into(), (100, 100));
+
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let safe_output_terminal = Arc::new(TokioMutex::new(stdout_mock.clone()));
+
+        let (history, _) = History::new();
+        let safe_history = Arc::new(TokioMutex::new(history));
+
+        let event = Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        let it = line
+            .handle_event(event, &mut *safe_output_terminal.lock().await, safe_history)
+            .await;
+
+        assert!(matches!(it, Ok(None)));
+
+        assert_eq!(line.current_column, 3);
+    }
+
+    #[tokio::test]
+    async fn test_search_next() {
+        let mut line = LineState::new("foo".into(), (100, 100));
+
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let safe_output_terminal = Arc::new(TokioMutex::new(stdout_mock.clone()));
+
+        let (history, _) = History::new();
+        let safe_history = Arc::new(TokioMutex::new(history));
+
+        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let it = line
+            .handle_event(event, &mut *safe_output_terminal.lock().await, safe_history)
+            .await;
+
+        assert!(matches!(it, Ok(None)));
+
+        assert_eq!(line.line, "");
     }
 }

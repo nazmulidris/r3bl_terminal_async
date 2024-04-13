@@ -17,7 +17,7 @@
 
 use crate::{
     History, LineState, PauseBuffer, PinnedInputStream, SafeBool, SafeHistory, SafeLineState,
-    SafeRawTerminal, SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
+    SafePauseBuffer, SafeRawTerminal, SharedWriter, Text, TokioMutex, CHANNEL_CAPACITY,
 };
 use crossterm::{
     event::Event,
@@ -34,8 +34,6 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
 };
-
-// 01: add tests
 
 /// ### Mental model and overview
 ///
@@ -58,6 +56,29 @@ use tokio::{
 /// allows the task to be paused, and resumed, and to flush the output from the
 /// [`SharedWriter`]s. When you [`Readline::close()`] the instance or drop it, this task
 /// is aborted.
+///
+/// ### Inputs and dependency injection
+///
+/// There are 2 main resources that must be passed into [`Self::new()`]:
+/// 1. [`PinnedInputStream`] - This trait represents an async stream of events. It is
+///    typically implemented by
+///    [`crossterm::event::EventStream`](https://docs.rs/crossterm/latest/crossterm/event/struct.EventStream.html).
+///    This is used to get input from the user. However for testing you can provide your
+///    own implementation of this trait.
+/// 2. [`SafeRawTerminal`] - This trait represents a raw terminal. It is typically
+///    implemented by [`std::io::Stdout`]. This is used to write to the terminal. However
+///    for testing you can provide your own implementation of this trait.
+///
+/// ### Support for testing
+///
+/// Almost all the fields of this struct contain `Safe` in their names. This is because
+/// they are wrapped in a `Mutex` and `Arc`, so that they can be shared between tasks.
+/// This makes it easier to test this struct, because you can mock the terminal output,
+/// and the input stream. You can also mock the history, and the pause buffer. This is all
+/// possible because of the dependency injection that this struct uses. See the tests for
+/// how this is used. If there are some fields that seem a bit uneconomic, in where they
+/// come from, it is probably due to the requirement for every part of this system to be
+/// testable (easily).
 ///
 /// ### Pause and resume
 ///
@@ -124,6 +145,8 @@ pub struct Readline {
     /// [SharedWriter]s can typically send messages, but this allows [Readline] instance
     /// to do the same.
     pub line_sender: Sender<LineControlSignal>,
+
+    pub safe_is_paused_buffer: SafePauseBuffer,
 }
 
 /// Error returned from [`readline()`][Readline::readline]. Such errors generally require
@@ -183,16 +206,15 @@ pub mod pause_and_resume_support {
         safe_is_paused: SafeBool,
         safe_line_state: SafeLineState,
         safe_raw_terminal: SafeRawTerminal,
+        safe_is_paused_buffer: SafePauseBuffer,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let mut is_paused_buffer: PauseBuffer = Default::default();
-
             loop {
                 let maybe_line_control_signal = line_receiver.recv().await;
 
                 let control_flow = poll_for_shared_writer_output(
                     maybe_line_control_signal,
-                    &mut is_paused_buffer,
+                    safe_is_paused_buffer.clone(),
                     safe_line_state.clone(),
                     safe_raw_terminal.clone(),
                     safe_is_paused.clone(),
@@ -217,7 +239,7 @@ pub mod pause_and_resume_support {
 
     /// Flush all writers to terminal and erase the prompt string.
     pub async fn flush_internal(
-        is_paused_buffer: &mut PauseBuffer,
+        self_safe_is_paused_buffer: SafePauseBuffer,
         safe_is_paused: SafeBool,
         safe_line_state: SafeLineState,
         safe_raw_terminal: SafeRawTerminal,
@@ -226,6 +248,8 @@ pub mod pause_and_resume_support {
         if *safe_is_paused.lock().await {
             return Ok(());
         }
+
+        let is_paused_buffer = &mut *self_safe_is_paused_buffer.lock().await;
 
         while let Some(buf) = is_paused_buffer.pop_front() {
             safe_line_state
@@ -248,7 +272,7 @@ pub mod pause_and_resume_support {
     /// - [InternalControlFlow::ReturnError]
     pub async fn poll_for_shared_writer_output(
         maybe_line_control_signal: Option<LineControlSignal>,
-        is_paused_buffer: &mut PauseBuffer,
+        self_safe_is_paused_buffer: SafePauseBuffer,
         self_safe_line_state: SafeLineState,
         self_safe_raw_terminal: SafeRawTerminal,
         self_safe_is_paused: SafeBool,
@@ -258,7 +282,8 @@ pub mod pause_and_resume_support {
                 LineControlSignal::Line(buf) => {
                     // If paused, then return!
                     if *self_safe_is_paused.lock().await {
-                        is_paused_buffer.push_back(buf);
+                        let pause_buffer = &mut *self_safe_is_paused_buffer.lock().await;
+                        pause_buffer.push_back(buf);
                         return InternalControlFlow::Continue;
                     }
 
@@ -276,7 +301,7 @@ pub mod pause_and_resume_support {
 
                 LineControlSignal::Flush => {
                     let _ = flush_internal(
-                        is_paused_buffer,
+                        self_safe_is_paused_buffer,
                         self_safe_is_paused,
                         self_safe_line_state,
                         self_safe_raw_terminal,
@@ -291,7 +316,7 @@ pub mod pause_and_resume_support {
                 LineControlSignal::Resume => {
                     *self_safe_is_paused.lock().await = false;
                     let _ = flush_internal(
-                        is_paused_buffer,
+                        self_safe_is_paused_buffer,
                         self_safe_is_paused,
                         self_safe_line_state,
                         self_safe_raw_terminal,
@@ -341,6 +366,10 @@ impl Readline {
         let line_state = LineState::new(prompt, terminal::size()?);
         let safe_line_state = Arc::new(TokioMutex::new(line_state));
 
+        // Pause buffer.
+        let is_paused_buffer = PauseBuffer::new();
+        let safe_is_paused_buffer = Arc::new(TokioMutex::new(is_paused_buffer));
+
         // Start task to process line_receiver.
         let monitor_line_receiver_task_join_handle =
             pause_and_resume_support::spawn_task_to_monitor_line_receiver(
@@ -348,6 +377,7 @@ impl Readline {
                 safe_is_paused.clone(),
                 safe_line_state.clone(),
                 safe_raw_terminal.clone(),
+                safe_is_paused_buffer.clone(),
             )
             .await;
 
@@ -362,6 +392,7 @@ impl Readline {
             safe_history,
             monitor_line_receiver_task_join_handle,
             line_sender: line_sender.clone(),
+            safe_is_paused_buffer,
         };
 
         // Print the prompt.
@@ -523,7 +554,7 @@ impl Readline {
 }
 
 #[cfg(test)]
-mod test_fixtures {
+pub mod test_fixtures {
     use crate::StdMutex;
 
     use super::*;
@@ -571,6 +602,8 @@ mod test_fixtures {
 
 #[cfg(test)]
 mod tests {
+    use crate::StdMutex;
+
     use super::*;
     use strip_ansi_escapes::strip;
     use tests::test_fixtures::{gen_input_stream, get_input_vec, StdoutMock};
@@ -584,7 +617,7 @@ mod tests {
 
         let output_buffer = Vec::new();
         let stdout_mock = StdoutMock {
-            buffer: Arc::new(std::sync::Mutex::new(output_buffer)),
+            buffer: Arc::new(StdMutex::new(output_buffer)),
         };
 
         // We will get the `line_state` out of this to test.
@@ -625,7 +658,7 @@ mod tests {
 
         let output_buffer = Vec::new();
         let stdout_mock = StdoutMock {
-            buffer: Arc::new(std::sync::Mutex::new(output_buffer)),
+            buffer: Arc::new(StdMutex::new(output_buffer)),
         };
 
         // We will get the `line_state` out of this to test.
@@ -647,6 +680,91 @@ mod tests {
         let output_buffer_data = String::from_utf8(output_buffer_data).expect("utf8");
         // println!("\n`{}`\n", output_buffer_data);
         assert!(output_buffer_data.contains("> abc"));
+    }
+
+    #[tokio::test]
+    async fn test_pause_resume() {
+        let prompt_str = "> ";
+
+        let output_buffer = Vec::new();
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(output_buffer)),
+        };
+
+        // We will get the `line_state` out of this to test.
+        let (readline, shared_writer) = Readline::new(
+            prompt_str.into(),
+            Arc::new(TokioMutex::new(stdout_mock.clone())),
+            gen_input_stream(),
+        )
+        .await
+        .unwrap();
+
+        shared_writer
+            .line_sender
+            .send(LineControlSignal::Pause)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        assert!(*readline.safe_is_paused.lock().await);
+
+        shared_writer
+            .line_sender
+            .send(LineControlSignal::Resume)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        assert!(!(*readline.safe_is_paused.lock().await));
+    }
+
+    #[tokio::test]
+    async fn test_pause_resume_with_output() {
+        let prompt_str = "> ";
+
+        let output_buffer = Vec::new();
+        let stdout_mock = StdoutMock {
+            buffer: Arc::new(StdMutex::new(output_buffer)),
+        };
+
+        // We will get the `line_state` out of this to test.
+        let (readline, shared_writer) = Readline::new(
+            prompt_str.into(),
+            Arc::new(TokioMutex::new(stdout_mock.clone())),
+            gen_input_stream(),
+        )
+        .await
+        .unwrap();
+
+        shared_writer
+            .line_sender
+            .send(LineControlSignal::Pause)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        assert!(*readline.safe_is_paused.lock().await);
+
+        shared_writer
+            .line_sender
+            .send(LineControlSignal::Line("abc".into()))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        let pause_buffer = readline.safe_is_paused_buffer.lock().await;
+        assert_eq!(pause_buffer.len(), 1);
+        assert_eq!(String::from_utf8_lossy(&pause_buffer[0]), "abc".to_string());
+
+        shared_writer
+            .line_sender
+            .send(LineControlSignal::Resume)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        assert!(!(*readline.safe_is_paused.lock().await));
     }
 }
 

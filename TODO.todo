@@ -23,8 +23,8 @@ refactor this crate:
   ✔ experiment: try and add modal support that stops `SharedWriter` when bar is spinning @done(24-03-31 18:46)
   ✔ add `is_tty` support to `Spinner` and `TerminalAsync` @done(24-04-02 18:06)
   ✔ add examples: terminal_async @done(24-04-02 18:06)
-  ☐ replace the dots w/ spinner that uses a colorwheel and cycles through chars: braille, blocks (of varying opacity)
-  ☐ add examples: visit files and folders breadth first or depth first (use memory arena, and IR-free visitor / streamed versions)
-  ☐ add tests: unit tests (record video)
-  ☐ add tests: and bats tests (record video)
-  ☐ move repo into `r3bl-open-core`
+  ✔ replace the dots w/ spinner that uses a colorwheel and cycles through chars: braille, blocks (of varying opacity) @done(24-04-13 15:03)
+  ✔ add examples: visit files and folders breadth first or depth first (use memory arena, and IR-free visitor / streamed versions) @done(24-04-13 15:03)
+  ✔ add tests: unit tests (record video) @done(24-04-13 15:03)
+  ✔ add tests: and bats tests (record video) @done(24-04-13 15:03)
+  ✔ move repo into `r3bl-open-core` @done(24-04-13 15:03)

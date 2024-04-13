@@ -19,8 +19,6 @@ use crate::HISTORY_SIZE_MAX;
 use std::collections::VecDeque;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-// 01: add tests
-
 pub struct History {
     pub entries: VecDeque<String>,
     pub max_size: usize,
@@ -67,7 +65,7 @@ impl History {
     }
 
     // Find next history that matches a given string from an index.
-    pub fn search_next(&mut self, _current: &str) -> Option<&str> {
+    pub fn search_next(&mut self) -> Option<&str> {
         if let Some(index) = &mut self.current_position {
             if *index < self.entries.len() - 1 {
                 *index += 1;
@@ -82,7 +80,7 @@ impl History {
     }
 
     // Find previous history item that matches a given string from an index.
-    pub fn search_previous(&mut self, _current: &str) -> Option<&str> {
+    pub fn search_previous(&mut self) -> Option<&str> {
         if let Some(index) = &mut self.current_position {
             if *index == 0 {
                 self.current_position = None;
@@ -93,5 +91,63 @@ impl History {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_update() {
+        let (mut history, _) = History::new();
+        history.max_size = 2;
+        history.update(Some("test1".into())).await;
+        assert_eq!(history.entries.front(), Some(&"test1".to_string()));
+
+        history.update(None).await;
+        assert_eq!(history.entries.front(), Some(&"test1".to_string()));
+
+        history.update(Some("test1".into())).await;
+        assert_eq!(history.entries.front(), Some(&"test1".to_string()));
+
+        history.update(Some("test2".into())).await;
+        assert_eq!(history.entries.front(), Some(&"test2".to_string()));
+
+        assert_eq!(history.entries.len(), 2);
+
+        history.update(Some("test3".into())).await;
+        assert_eq!(history.entries.len(), 2);
+        assert!(history.entries.contains(&"test2".to_string()));
+        assert!(history.entries.contains(&"test3".to_string()));
+    }
+
+    // write tests for search_next and search_previous
+    #[tokio::test]
+    async fn test_search_next() {
+        let (mut history, _) = History::new();
+        history.max_size = 2;
+        history.update(Some("test1".into())).await;
+        history.update(Some("test2".into())).await;
+        history.update(Some("test3".into())).await;
+
+        assert_eq!(history.search_next(), Some("test3"));
+        assert_eq!(history.search_next(), Some("test2"));
+        assert_eq!(history.search_next(), Some("test2"));
+        assert_eq!(history.search_next(), Some("test2"));
+    }
+
+    #[tokio::test]
+    async fn test_search_previous() {
+        let (mut history, _) = History::new();
+        history.max_size = 2;
+        history.update(Some("test1".into())).await;
+        history.update(Some("test2".into())).await;
+        history.update(Some("test3".into())).await;
+
+        assert_eq!(history.search_previous(), None);
+        assert_eq!(history.search_next(), Some("test3"));
+        assert_eq!(history.search_previous(), Some(""));
+        assert_eq!(history.search_previous(), None);
     }
 }
