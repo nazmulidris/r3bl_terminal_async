@@ -72,7 +72,7 @@ fn get_info_message() -> String {
         format!("{:?}", commands).blue()
     };
     let info_message = format!(
-        "try Ctrl+D, Up, Down, `{}`, `{}`, `{}`, and `{}`",
+        "try Ctrl+D, Up, Down, Left, Right, Ctrl+left, Ctrl+right, `{}`, `{}`, `{}`, and `{}`",
         Command::StartTask1,
         Command::Spinner,
         Command::StartTask2,
