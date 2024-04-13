@@ -18,8 +18,6 @@
 use crate::{LineControlSignal, Text};
 use std::io::{self, Write};
 
-// 01: add tests
-
 /// Cloneable object that implements [`Write`] and allows for sending data
 /// to the terminal without messing up the [`crate::Readline`].
 ///
@@ -82,5 +80,36 @@ impl Write for SharedWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write() {
+        let (line_sender, _) = tokio::sync::mpsc::channel(1_000);
+        let mut shared_writer = SharedWriter {
+            buffer: Vec::new(),
+            line_sender,
+        };
+        shared_writer.write_all(b"Hello, World!").unwrap();
+        assert_eq!(shared_writer.buffer, b"Hello, World!");
+    }
+
+    #[tokio::test]
+    async fn test_writeln() {
+        let (line_sender, mut line_receiver) = tokio::sync::mpsc::channel(1_000);
+        let mut shared_writer = SharedWriter {
+            buffer: Vec::new(),
+            line_sender,
+        };
+        shared_writer.write_all(b"Hello, World!\n").unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let it = line_receiver.recv().await.unwrap();
+        assert_eq!(it, LineControlSignal::Line(b"Hello, World!\n".to_vec()));
     }
 }

@@ -127,15 +127,20 @@ cargo run --example spinner
    [`Readline::readline`] field. Details on this struct are listed below. For most use
    cases you won't need to do this.
 
-### [`Readline`] overview, please see the docs for this struct for details
+### [`Readline`] overview (please see the docs for this struct for details)
 
 - Structure for reading lines of input from a terminal while lines are output to the
-  terminal concurrently.
-- Terminal input is retrieved by calling `Readline::readline()`, which returns each
+  terminal concurrently. It uses dependency injection, allowing you to supply
+  resources that can be used to:
+  1. Read input from the user, typically
+     [`crossterm::event::EventStream`](https://docs.rs/crossterm/latest/crossterm/event/struct.EventStream.html).
+  2. Generate output to the raw terminal, typically [`std::io::Stdout`].
+
+- Terminal input is retrieved by calling [`Readline::readline()`], which returns each
   complete line of input once the user presses Enter.
-- Each `Readline` instance is associated with one or more `SharedWriter` instances.
-  Lines written to an associated `SharedWriter` are output while retrieving input with
-  `readline()` or by calling `flush()`.
+
+- Each [`Readline`] instance is associated with one or more [`SharedWriter`] instances.
+  Lines written to an associated [`SharedWriter`] are output to the raw terminal.
 
 - Call [`Readline::new()`] to create a [`Readline`] instance and associated
   [`SharedWriter`].
@@ -148,11 +153,11 @@ cargo run --example spinner
   history (so that the user can retrieve it while editing a later line),
   call [`Readline::add_history_entry()`].
 
-- Lines written to the associated `SharedWriter` while `readline()` is in
+- Lines written to the associated [`SharedWriter`] while `readline()` is in
   progress will be output to the screen above the input line.
 
 - When done, call [`crate::pause_and_resume_support::flush_internal()`] to ensure that
-  all lines written to the `SharedWriter` are output.
+  all lines written to the [`SharedWriter`] are output.
 
 ### [`Spinner::try_start()`]
 

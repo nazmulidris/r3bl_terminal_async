@@ -33,8 +33,6 @@ pub struct TerminalAsync {
     pub shared_writer: SharedWriter,
 }
 
-// 01: add tests
-
 impl TerminalAsync {
     /// Create a new instance of [TerminalAsync]. Example of `prompt` is `"> "`.
     ///
