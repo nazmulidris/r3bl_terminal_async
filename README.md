@@ -1,8 +1,42 @@
 # r3bl_terminal_async
 
 The `r3bl_terminal_async` library lets your CLI program be asynchronous and
-interactive without blocking the main thread. It allows you to create beautiful REPLs
-(read execute print loops) with ease. The following is a list of features:
+interactive without blocking the main thread. Your spawned tasks can use it to
+concurrently write to the display output, pause and resume it. You can also display of
+colorful animated spinners ⌛🌈 for long running tasks. With it, you can create
+beautiful, powerful, and interactive REPLs (read execute print loops) with ease.
+
+## Why use this crate
+
+1. Because
+   [`read_line()`](https://doc.rust-lang.org/std/io/struct.Stdin.html#method.read_line)
+   is blocking. And there is no way to terminate an OS thread that is blocking in Rust.
+   To do this you have to exit the process (who's thread is blocked in `read_line()`).
+
+    - There is no way to get `read_line()` unblocked once it is blocked.
+    - You can use [`process::exit()`](https://doc.rust-lang.org/std/process/fn.exit.html)
+      or [`panic!()`](https://doc.rust-lang.org/std/panic/index.html) to kill the entire
+      process. This is not appealing.
+    - Even if that task is wrapped in a [`thread::spawn()` or
+      `thread::spawn_blocking()`](https://tokio.rs/tokio/tutorial/spawning), it isn't
+      possible to cancel or abort that thread, without cooperatively asking it to exit. To
+      see what this type of code looks like, take a look at
+      [this](https://github.com/nazmulidris/rust-scratch/blob/fcd730c4b17ed0b09ff2c1a7ac4dd5b4a0c66e49/tcp-api-server/src/client_task.rs#L275).
+
+2. Another annoyance is that when a thread is blocked in `read_line()`, and you have
+   to display output to `stdout` concurrently, this poses some challenges.
+
+    - This is because the caret is moved by `read_line()` and it blocks.
+    - When another thread / task writes to `stdout` concurrently, it assumes that the
+      caret is at row 0 of a new line.
+    - This results in output that doesn't look good.
+
+Here is a video of the `terminal_async` and `spinner` examples in this crate, in
+action:
+
+![terminal_async_video](https://github.com/nazmulidris/r3bl_terminal_async/blob/main/docs/r3bl_terminal_async_clip_ffmpeg.gif?raw=true)
+
+## Features
 
 1. Read user input from the terminal line by line, while your program concurrently
    writes lines to the same terminal. One [`Readline`] instance can be used to spawn
@@ -44,43 +78,30 @@ cargo run --examples terminal_async
 echo "hello" | cargo run --examples terminal_async
 ```
 
-Here is a video of the `terminal_async` and `spinner` examples in action:
-![terminal_async_video](https://github.com/nazmulidris/r3bl_terminal_async/blob/main/docs/r3bl_terminal_async_clip_ffmpeg.gif?raw=true)
+### Input Editing Behavior
 
-### Why use this crate
+While entering text, the user can edit and navigate through the current
+input line with the following key bindings:
 
-1. Because
-   [`read_line()`](https://doc.rust-lang.org/std/io/struct.Stdin.html#method.read_line)
-   is blocking. And there is no way to terminate an OS thread that is blocking in Rust.
-   To do this you have to exit the process (who's thread is blocked in `read_line()`).
-
-    - There is no way to get `read_line()` unblocked once it is blocked.
-    - You can use [`process::exit()`](https://doc.rust-lang.org/std/process/fn.exit.html)
-      or [`panic!()`](https://doc.rust-lang.org/std/panic/index.html) to kill the entire
-      process. This is not appealing.
-    - Even if that task is wrapped in a [`thread::spawn()` or
-      `thread::spawn_blocking()`](https://tokio.rs/tokio/tutorial/spawning), it isn't
-      possible to cancel or abort that thread, without cooperatively asking it to exit. To
-      see what this type of code looks like, take a look at
-      [this](https://github.com/nazmulidris/rust-scratch/blob/fcd730c4b17ed0b09ff2c1a7ac4dd5b4a0c66e49/tcp-api-server/src/client_task.rs#L275).
-
-2. Another annoyance is that when a thread is blocked in `read_line()`, and you have
-   to display output to `stdout` concurrently, this poses some challenges.
-
-    - This is because the caret is moved by `read_line()` and it blocks.
-    - When another thread / task writes to `stdout` concurrently, it assumes that the
-      caret is at row 0 of a new line.
-    - This results in output that doesn't look good.
-
-#### More info on blocking and thread cancellation in Rust
-
-- [Docs: tokio's `stdin`](https://docs.rs/tokio/latest/tokio/io/struct.Stdin.html)
-- [Discussion: Stopping a thread in
-  Rust](https://users.rust-lang.org/t/stopping-a-thread/6328/7)
-- [Discussion: Support for
-  `Thread::cancel()`](https://internals.rust-lang.org/t/thread-cancel-support/3056/16)
-- [Discussion: stdin, stdout redirection for spawned
-  processes](https://stackoverflow.com/questions/34611742/how-do-i-read-the-output-of-a-child-process-without-blocking-in-rust)
+- Works on all platforms supported by `crossterm`.
+- Full Unicode Support (Including Grapheme Clusters).
+- Multiline Editing.
+- In-memory History.
+- Left, Right: Move cursor left/right.
+- Up, Down: Scroll through input history.
+- Ctrl-W: Erase the input from the cursor to the previous whitespace.
+- Ctrl-U: Erase the input before the cursor.
+- Ctrl-L: Clear the screen.
+- Ctrl-Left / Ctrl-Right: Move to previous/next whitespace.
+- Home: Jump to the start of the line.
+    - When the "emacs" feature (on by default) is enabled, Ctrl-A has the
+      same effect.
+- End: Jump to the end of the line.
+    - When the "emacs" feature (on by default) is enabled, Ctrl-E has the
+      same effect.
+- Ctrl-C, Ctrl-D: Send an `Eof` event.
+- Ctrl-C: Send an `Interrupt` event.
+- Extensible design based on `crossterm`'s `event-stream` feature.
 
 ## Examples
 
@@ -106,7 +127,7 @@ cargo run --example spinner
    [`Readline::readline`] field. Details on this struct are listed below. For most use
    cases you won't need to do this.
 
-#### [`Readline`] overview, please see the docs for this struct for details
+### [`Readline`] overview, please see the docs for this struct for details
 
 - Structure for reading lines of input from a terminal while lines are output to the
   terminal concurrently.
@@ -150,49 +171,6 @@ This is a convenience method to setup Tokio [`tracing_subscriber`] with `stdout`
 destination. This method also ensures that the [`SharedWriter`] is used for concurrent
 writes to `stdout`.
 
-## Input Editing Behavior
-
-While entering text, the user can edit and navigate through the current
-input line with the following key bindings:
-
-- Works on all platforms supported by `crossterm`.
-- Full Unicode Support (Including Grapheme Clusters).
-- Multiline Editing.
-- In-memory History.
-- Left, Right: Move cursor left/right.
-- Up, Down: Scroll through input history.
-- Ctrl-W: Erase the input from the cursor to the previous whitespace.
-- Ctrl-U: Erase the input before the cursor.
-- Ctrl-L: Clear the screen.
-- Ctrl-Left / Ctrl-Right: Move to previous/next whitespace.
-- Home: Jump to the start of the line.
-    - When the "emacs" feature (on by default) is enabled, Ctrl-A has the
-      same effect.
-- End: Jump to the end of the line.
-    - When the "emacs" feature (on by default) is enabled, Ctrl-E has the
-      same effect.
-- Ctrl-C, Ctrl-D: Send an `Eof` event.
-- Ctrl-C: Send an `Interrupt` event.
-- Extensible design based on `crossterm`'s `event-stream` feature.
-
-## Why another async readline crate?
-
-This crate & repo is forked from
-[rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
-been rewritten and re-architected. Here are some changes made to the code:
-- Rearchitect the entire crate from the ground up to operate in a totally different
-  manner than the original. All the underlying mental models are different, and
-  simpler.
-- Drop support for all async runtimes other than `tokio`. Rewrite all the code for
-  this.
-- Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code
-  for this.
-- Drop `simplelog` and `log` dependencies. Add support for `tokio-tracing`. Rewrite
-  all the code for this, and add `tracing_setup.rs`.
-- Remove all examples and create new ones to mimic a real world CLI application.
-- Add `spinner_impl`, `readline_impl`, and `public_api` modules.
-- Add tests.
-
 ## Video series on [developerlife.com](https://developerlife.com) [YT channel](https://www.youtube.com/@developerlifecom) on building this crate with Naz
 
 - [Part 1: Why?](https://youtu.be/6LhVx0xM86c)
@@ -207,5 +185,35 @@ been rewritten and re-architected. Here are some changes made to the code:
 - Playlists
   - [Build with Naz, async readline and spinner for CLI in Rust](https://www.youtube.com/watch?v=3vQJguti02I&list=PLofhE49PEwmwelPkhfiqdFQ9IXnmGdnSE)
   - [Build with Naz, testing in Rust](https://www.youtube.com/watch?v=Xt495QLrFFk&list=PLofhE49PEwmwLR_4Noa0dFOSPmSpIg_l8)
+
+## Why another async readline crate?
+
+This crate & repo is forked from
+[rustyline-async](https://github.com/zyansheep/rustyline-async). However it has mostly
+been rewritten and re-architected. Here are some changes made to the code:
+- Rearchitect the entire crate from the ground up to operate in a totally different
+  manner than the original. All the underlying mental models are different, and
+  simpler. The main event loop is redone. And a task is used to monitor the line
+  channel for communication between multiple [SharedWriter]s and the [Readline], to
+  properly support pause and resume, and other control functions.
+- Drop support for all async runtimes other than `tokio`. Rewrite all the code for
+  this.
+- Drop crates like `pin-project`, `thingbuf` in favor of `tokio`. Rewrite all the code
+  for this.
+- Drop `simplelog` and `log` dependencies. Add support for `tokio-tracing`. Rewrite
+  all the code for this, and add `tracing_setup.rs`.
+- Remove all examples and create new ones to mimic a real world CLI application.
+- Add `spinner_impl`, `readline_impl`, and `public_api` modules.
+- Add tests.
+
+## More info on blocking and thread cancellation in Rust
+
+- [Docs: tokio's `stdin`](https://docs.rs/tokio/latest/tokio/io/struct.Stdin.html)
+- [Discussion: Stopping a thread in
+  Rust](https://users.rust-lang.org/t/stopping-a-thread/6328/7)
+- [Discussion: Support for
+  `Thread::cancel()`](https://internals.rust-lang.org/t/thread-cancel-support/3056/16)
+- [Discussion: stdin, stdout redirection for spawned
+  processes](https://stackoverflow.com/questions/34611742/how-do-i-read-the-output-of-a-child-process-without-blocking-in-rust)
 
 License: Apache-2.0
