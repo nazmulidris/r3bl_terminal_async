@@ -1,4 +1,4 @@
-# This crate has been permanently moved to [r3bl_terminal](https://github.com/r3bl-org/r3bl-open-core/tree/main/terminal_async).
+# This crate has been permanently moved to [r3bl_terminal_async](https://github.com/r3bl-org/r3bl-open-core/tree/main/terminal_async).
 
 The `r3bl_terminal_async` library lets your CLI program be asynchronous and
 interactive without blocking the main thread. Your spawned tasks can use it to
